@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# ips — color-coded network interface overview
+
+R=$'\033[0m'
+BOLD=$'\033[1m'
+CYAN=$'\033[1;36m'
+GREEN=$'\033[1;32m'
+RED=$'\033[1;31m'
+YELLOW=$'\033[0;33m'
+BLUE=$'\033[0;34m'
+GRAY=$'\033[0;90m'
+WHITE=$'\033[1;37m'
+DIM=$'\033[2m'
+
+declare -A iface_state iface_mtu iface_mac iface_ipv4 iface_ipv6
+
+# Parse link info (state, MTU, MAC)
+while IFS= read -r line; do
+    name=$(awk '{print $2}' <<< "$line" | tr -d ':')
+    [[ "$name" == "lo" ]] && continue
+    iface_state[$name]=$(grep -oP 'state \K\S+' <<< "$line")
+    iface_mtu[$name]=$(grep -oP 'mtu \K[0-9]+' <<< "$line")
+    iface_mac[$name]=$(grep -oP 'link/ether \K[0-9a-f:]+' <<< "$line")
+done < <(ip -o link show)
+
+# Parse addr info (IPv4, IPv6 — skip loopback and link-local)
+while IFS= read -r line; do
+    name=$(awk '{print $2}' <<< "$line")
+    [[ "$name" == "lo" ]] && continue
+    family=$(awk '{print $3}' <<< "$line")
+    addr=$(awk '{print $4}' <<< "$line")
+    case "$family" in
+        inet)
+            [[ "$addr" == 169.254.* ]] && continue
+            iface_ipv4[$name]="$addr"
+            ;;
+        inet6)
+            [[ "$addr" == ::1* || "$addr" == fe80* ]] && continue
+            iface_ipv6[$name]="$addr"
+            ;;
+    esac
+done < <(ip -o addr show)
+
+# Collect non-loopback interface names in order
+mapfile -t ifaces < <(ip -o link show | awk '{print $2}' | tr -d ':' | grep -v '^lo$')
+
+echo ""
+up_count=0
+
+for name in "${ifaces[@]}"; do
+    st="${iface_state[$name]:-UNKNOWN}"
+    case "$st" in
+        UP)      st_color="${GREEN}${BOLD}" ; (( up_count++ )) ;;
+        DOWN)    st_color="${RED}${BOLD}" ;;
+        *)       st_color="${YELLOW}${BOLD}" ;;
+    esac
+
+    printf "${CYAN}${BOLD}%-14s${R}  ${st_color}%-8s${R}  ${GRAY}MTU ${WHITE}%s${R}\n" \
+        "$name" "$st" "${iface_mtu[$name]:-?}"
+
+    [[ -n "${iface_ipv4[$name]}" ]] && \
+        printf "  ${GRAY}IPv4${R}   ${GREEN}%s${R}\n" "${iface_ipv4[$name]}"
+
+    [[ -n "${iface_ipv6[$name]}" ]] && \
+        printf "  ${GRAY}IPv6${R}   ${BLUE}%s${R}\n" "${iface_ipv6[$name]}"
+
+    [[ -n "${iface_mac[$name]}" ]] && \
+        printf "  ${GRAY}MAC ${R}   ${YELLOW}%s${R}\n" "${iface_mac[$name]}"
+
+    echo ""
+done
+
+printf "${DIM}%d interface(s), %d up${R}\n\n" "${#ifaces[@]}" "$up_count"

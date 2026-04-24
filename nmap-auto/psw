@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# psw — ping sweep (ICMP first, ARP fallback) for local subnet host discovery
+
+R=$'\033[0m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+CYAN=$'\033[1;36m'
+GREEN=$'\033[1;32m'
+RED=$'\033[1;31m'
+YELLOW=$'\033[0;33m'
+BLUE=$'\033[0;34m'
+GRAY=$'\033[0;90m'
+WHITE=$'\033[1;37m'
+MAGENTA=$'\033[1;35m'
+
+read -rp "Enter a Subnet IP: " subnet
+
+# Normalise: strip trailing dot, strip last octet only if 4 octets given
+subnet="${subnet%\.}"
+dot_count=$(tr -cd '.' <<< "$subnet" | wc -c)
+[[ $dot_count -eq 3 ]] && subnet="${subnet%.*}"
+
+if [[ -z "$subnet" || $dot_count -lt 2 ]]; then
+    printf "${RED}Error: provide at least three octets (e.g. 10.10.10)${R}\n" >&2
+    exit 1
+fi
+
+target="${subnet}.0/24"
+
+# Collect this machine's IPs
+mapfile -t my_ips < <(ip -o addr show | awk '/inet / {print $4}' | cut -d/ -f1)
+
+is_me() {
+    local ip="$1"
+    for mine in "${my_ips[@]}"; do
+        [[ "$ip" == "$mine" ]] && return 0
+    done
+    return 1
+}
+
+# Reverse DNS — short timeout, silent on failure
+rdns() {
+    timeout 1 host "$1" 2>/dev/null \
+        | awk '/domain name pointer/ {sub(/\.$/, "", $NF); print $NF; exit}'
+}
+
+# Print a single host row
+# Args: ip  method  mac  vendor
+print_host() {
+    local ip="$1" method="$2" mac="$3" vendor="$4"
+
+    local method_tag method_color
+    case "$method" in
+        ICMP) method_color="${CYAN}"   ; method_tag="[ICMP]" ;;
+        ARP)  method_color="${YELLOW}" ; method_tag="[ARP] " ;;
+    esac
+
+    local hostname
+    hostname=$(rdns "$ip")
+    local host_display="${hostname:-unknown}"
+
+    if is_me "$ip"; then
+        printf "  ${GREEN}${BOLD}%-18s${R}  ${method_color}%s${R}  ${GREEN}${BOLD}%-30s${R}  ${MAGENTA}${BOLD}[you]${R}" \
+            "$ip" "$method_tag" "$host_display"
+    else
+        printf "  ${WHITE}%-18s${R}  ${method_color}%s${R}  ${BLUE}%-30s${R}" \
+            "$ip" "$method_tag" "$host_display"
+    fi
+
+    # Append MAC + vendor for ARP results
+    if [[ -n "$mac" ]]; then
+        printf "  ${YELLOW}%s${R}  ${GRAY}%s${R}" "$mac" "$vendor"
+    fi
+
+    printf "\n"
+}
+
+echo ""
+printf "${GRAY}Sweeping ${WHITE}%s${GRAY}...${R}\n" "$target"
+echo ""
+
+# ── ICMP sweep ──────────────────────────────────────────────────────────────
+mapfile -t icmp_hosts < <(fping -a -q -g "$target" 2>/dev/null)
+
+if [[ ${#icmp_hosts[@]} -gt 0 ]]; then
+    printf "  ${DIM}%-18s  %-7s  %-30s${R}\n" "IP" "METHOD" "HOSTNAME"
+    printf "  ${GRAY}%s${R}\n" "$(printf '─%.0s' {1..62})"
+
+    for h in "${icmp_hosts[@]}"; do
+        print_host "$h" "ICMP" "" ""
+    done
+
+    echo ""
+    printf "${DIM}%d host(s) found via ICMP.${R}\n\n" "${#icmp_hosts[@]}"
+
+else
+    printf "${YELLOW}No ICMP responses — falling back to ARP...${R}\n\n"
+
+    # ── ARP fallback ────────────────────────────────────────────────────────
+    mapfile -t arp_lines < <(sudo arp-scan "$target" 2>/dev/null \
+        | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1, $2, $3}')
+
+    if [[ ${#arp_lines[@]} -gt 0 ]]; then
+        printf "  ${DIM}%-18s  %-7s  %-30s  %-19s  %s${R}\n" \
+            "IP" "METHOD" "HOSTNAME" "MAC" "VENDOR"
+        printf "  ${GRAY}%s${R}\n" "$(printf '─%.0s' {1..88})"
+
+        for line in "${arp_lines[@]}"; do
+            read -r ip mac vendor <<< "$line"
+            print_host "$ip" "ARP" "$mac" "$vendor"
+        done
+
+        echo ""
+        printf "${DIM}%d host(s) found via ARP.${R}\n\n" "${#arp_lines[@]}"
+    else
+        printf "${RED}No hosts found.${R}\n\n"
+    fi
+fi
