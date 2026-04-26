@@ -777,8 +777,8 @@ sub_header "Database Files on Disk" "$sql"
 run_cmd "find .db/.sql files" "find / -name '*.db' -o -name '*.sql' -o -name '*.sqlite' -o -name '*.sqlite3' 2>/dev/null | head -20" "$sql"
 
 sub_header "PostgreSQL Config" "$sql"
+run_cmd "pg_hba.conf locations" "find / -name 'pg_hba.conf' ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null | head -5" "$sql"
 pg_hba_path=$(find / -name 'pg_hba.conf' ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null | head -5)
-run_cmd "pg_hba.conf locations" "echo '$pg_hba_path'" "$sql"
 for hba in $pg_hba_path; do
     if [ -r "$hba" ]; then
         run_cmd "$hba" "cat $hba" "$sql"
