@@ -62,8 +62,8 @@ alias pad='mousepad "$@" &>/dev/null & disown'
 www()    { python3 -m http.server ${1:-80}; }          # serve current dir; optional port arg
 ips()    { ip -4 -brief addr show; }                   # quick view of all IPv4 interfaces
 mkcd()   { mkdir -p "$1" && cd "$1"; }                 # make dir and cd into it
-docs()   { cat ~/Tools/Documents/"$@"; }               # read from ~/Tools/Documents/
-cheats() { cat ~/Tools/Documents/Cheatsheets/"$@"; }   # read from ~/Tools/Documents/Cheatsheets/
+docs()   { cat ~/Tools/Documents/"$@"; }               # read from ~/Tools/Documents/ (tab completion configured separately in .zshrc)
+cheats() { cat ~/Tools/Documents/Cheatsheets/"$@"; }   # read from ~/Tools/Documents/Cheatsheets/ (tab completion configured separately in .zshrc)
 
 nmapz() {  # full port scan with -sC -sV -O; usage: nmapz <target> [outname] [T3|T4|T5] [-- flags]
   local target="$1" out="${2:-nmap_scan}" timing="T4"
