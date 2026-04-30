@@ -1,0 +1,89 @@
+ALIASES
+=======
+
+# LISTING / NAVIGATION
+alias ls='ls --color=auto'
+alias l='ls -CF'
+alias ll='ls -lah'
+alias la='ls -lAh'
+alias cls='clear && ls'
+
+# FILE OPERATIONS
+alias mkdir='mkdir -pv'
+alias rd='rmdir'
+alias rmf='rm -rf'
+alias cmx='chmod +x'
+alias wget='wget -c'
+
+# GREP / DIFF / IP (color)
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+alias diff='diff --color=auto'
+alias ip='ip --color=auto'
+
+# SYSTEM INFO
+alias df='df -h'
+alias du='du -h'
+alias free='free -h'
+
+# PACKAGE MANAGEMENT
+alias install='sudo apt install'
+alias remove='sudo apt remove'
+alias autoremove='sudo apt autoremove'
+alias upgrade='sudo apt update && sudo apt upgrade -y'
+
+# SHELL / CONFIG
+alias reload='source ~/.zshrc'
+alias zesh='subl ~/.zshrc'
+alias etsy='sudo subl /etc/hosts'
+alias clc='clear && cat'
+
+# NETWORK
+alias tun0ip='ip addr show tun0 2>/dev/null | grep "inet " | awk "{print \$2}" | cut -d/ -f1'
+alias myip='ip -4 addr show scope global | grep inet | awk "{print \$2}" | cut -d/ -f1 | head -1'
+alias pchainz='proxychains4 -q'
+
+# WEB FUZZING / ENUMERATION
+alias dsearch='dirsearch -u'
+alias rscan='rustscan -a'
+alias ssm='searchsploit -m'
+alias SS='searchsploit'
+
+# EXPLOITATION / TEMPLATES
+alias tplmap='python3 -W ignore /opt/tplmap/tplmap.py'
+alias sstimap='/opt/sstimap/venv/bin/python /opt/sstimap/sstimap.py'
+
+# MISC
+alias tldr='DOTENV_CONFIG_QUIET=true tldr'
+alias pad='mousepad "$@" &>/dev/null & disown'
+
+# SHELL FUNCTIONS
+www()    { python3 -m http.server ${1:-80}; }          # serve current dir; optional port arg
+ips()    { ip -4 -brief addr show; }                   # quick view of all IPv4 interfaces
+mkcd()   { mkdir -p "$1" && cd "$1"; }                 # make dir and cd into it
+docs()   { cat ~/Tools/Documents/"$@"; }               # read from ~/Tools/Documents/
+cheats() { cat ~/Tools/Documents/Cheatsheets/"$@"; }   # read from ~/Tools/Documents/Cheatsheets/
+
+nmapz() {  # full port scan with -sC -sV -O; usage: nmapz <target> [outname] [T3|T4|T5] [-- flags]
+  local target="$1" out="${2:-nmap_scan}" timing="T4"
+  shift 2 2>/dev/null
+  [[ "$1" =~ ^T[3-5]$ ]] && { timing="$1"; shift; }
+  [ "$1" = "--" ] && shift
+  mkdir -p nmap
+  nmap "$target" -p- -oA "nmap/$out" -sC -sV -O -"$timing" "$@"
+}
+
+xmas() {   # Xmas scan; usage: xmas <target> [extra nmap flags]
+  local target="$1"; shift
+  nmap -sX -T4 -n -Pn -p- "$target" "$@"
+}
+
+reconweb() {  # scaffold a recon directory; usage: reconweb <name> [target]
+  # creates: exploits/ loot/ screenshots/ notes/ scans/{nmap,gobuster,nikto,whatweb,ffuf}
+  local name="$1" target="${2:-}"
+  mkdir -p "$name"/{exploits,loot,screenshots,notes}
+  mkdir -p "$name"/scans/{nmap,gobuster,nikto,whatweb,ffuf}
+  [[ -n "$target" ]] && echo "$target" > "$name/target"
+  cd "$name"
+}
