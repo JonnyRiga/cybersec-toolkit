@@ -1,24 +1,28 @@
 #!/bin/bash
 
-DEFAULT_WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+DEFAULT_WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt"
 
 show_help() {
-    echo "Usage: vfuzzer <DOMAIN> [IP] [http|https] [WORDLIST] <FS> [-t THREADS] [-o OUTFILE] [--dns]"
+    echo "Usage: vfuzzer <DOMAIN> [IP] [http|https] [WORDLIST] <FS> [-t THREADS] [-o OUTFILE] [-p DELAY] [-k] [-r] [--dns]"
     echo "   -h, --help  Display this help and exit"
     echo
     echo "  DOMAIN      Target domain (required)"
     echo "  IP          Target IP to connect to — defaults to DOMAIN (vhost mode only)"
     echo "  http|https  Protocol shorthand — defaults to http"
-    echo "  WORDLIST    Path to wordlist (default: subdomains-top1million-5000.txt)"
+    echo "  WORDLIST    Path to wordlist (default: subdomains-top1million-110000.txt)"
     echo "  FS          Filter size (optional, always last positional — omit to auto-calibrate)"
     echo "  -t THREADS  Number of threads (default: ffuf default 40)"
     echo "  -o OUTFILE  Save results to file (JSON format)"
+    echo "  -p DELAY    Delay between requests in seconds (e.g. 0.1) — useful against rate-limited targets"
+    echo "  -k          Skip TLS certificate verification (required for self-signed certs)"
+    echo "  -r          Follow redirects"
     echo "  --dns       Subdomain mode: fuzz http://FUZZ.DOMAIN instead of Host header"
     echo
     echo "Examples:"
     echo "  vfuzzer example.com 1234"
     echo "  vfuzzer example.com 10.10.10.5 1234"
-    echo "  vfuzzer example.com 10.10.10.5 https 1234 -t 20 -o results.json"
+    echo "  vfuzzer example.com 10.10.10.5 https 1234 -k -t 20 -o results.json"
+    echo "  vfuzzer example.com 10.10.10.5 https -k"
     echo "  vfuzzer example.com --dns 1234"
 }
 
@@ -30,12 +34,18 @@ fi
 # Extract flags first, rebuild args without them
 THREADS=""
 OUTFILE=""
+DELAY=""
+INSECURE=false
+FOLLOW_REDIRECTS=false
 DNS_MODE=false
 positional=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -t) THREADS="$2"; shift 2 ;;
         -o) OUTFILE="$2"; shift 2 ;;
+        -p) DELAY="$2"; shift 2 ;;
+        -k) INSECURE=true; shift ;;
+        -r) FOLLOW_REDIRECTS=true; shift ;;
         --dns) DNS_MODE=true; shift ;;
         *)  positional+=("$1"); shift ;;
     esac
@@ -83,6 +93,9 @@ $DNS_MODE || echo "[*] Target:   $TARGET"
 echo "[*] Wordlist: $WORDLIST"
 [[ -n "$FS" ]] && echo "[*] FS:       $FS"
 [[ -n "$THREADS" ]] && echo "[*] Threads:  $THREADS"
+[[ -n "$DELAY" ]] && echo "[*] Delay:    ${DELAY}s"
+$INSECURE && echo "[*] TLS:      insecure (-k)"
+$FOLLOW_REDIRECTS && echo "[*] Redirects: follow (-r)"
 [[ -n "$OUTFILE" ]] && echo "[*] Output:   $OUTFILE"
 echo
 
@@ -97,6 +110,9 @@ else
     FFUF_CMD+=(-ac)
 fi
 [[ -n "$THREADS" ]] && FFUF_CMD+=(-t "$THREADS")
+[[ -n "$DELAY" ]] && FFUF_CMD+=(-p "$DELAY")
+$INSECURE && FFUF_CMD+=(-k)
+$FOLLOW_REDIRECTS && FFUF_CMD+=(-r)
 [[ -n "$OUTFILE" ]] && FFUF_CMD+=(-o "$OUTFILE" -of json)
 
 "${FFUF_CMD[@]}"

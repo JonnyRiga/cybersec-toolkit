@@ -10,15 +10,18 @@ Virtual host and subdomain fuzzer built on `ffuf`. Supports vhost mode (Host hea
 ## Usage
 
 ```
-vfuzzer <DOMAIN> [IP] [http|https] [WORDLIST] [FS] [-t THREADS] [-o OUTFILE] [--dns]
+vfuzzer <DOMAIN> [IP] [http|https] [WORDLIST] <FS> [-t THREADS] [-o OUTFILE] [-p DELAY] [-k] [-r] [--dns]
 
   DOMAIN      Target domain (required)
   IP          Target IP to connect to — defaults to DOMAIN (vhost mode only)
   http|https  Protocol — defaults to http
-  WORDLIST    Path to wordlist (default: subdomains-top1million-5000.txt)
+  WORDLIST    Path to wordlist (default: subdomains-top1million-110000.txt)
   FS          Filter size (positional, always last — omit to auto-calibrate)
   -t THREADS  Thread count (default: ffuf default 40)
   -o OUTFILE  Save results to file (JSON)
+  -p DELAY    Delay between requests in seconds (e.g. 0.1)
+  -k          Skip TLS certificate verification (self-signed certs)
+  -r          Follow redirects
   --dns       Subdomain mode: fuzz http://FUZZ.DOMAIN instead of Host header
 ```
 
@@ -31,8 +34,17 @@ vfuzzer example.com 1234
 # Vhost mode — target IP differs from domain (typical CTF/lab)
 vfuzzer example.com 10.10.10.5 1234
 
-# HTTPS with threads and output file
-vfuzzer example.com 10.10.10.5 https 1234 -t 20 -o results.json
+# HTTPS with self-signed cert
+vfuzzer example.com 10.10.10.5 https -k
+
+# HTTPS with self-signed cert, filter size, threads, output
+vfuzzer example.com 10.10.10.5 https 1234 -k -t 20 -o results.json
+
+# Rate-limited target — add delay between requests
+vfuzzer example.com 10.10.10.5 1234 -p 0.1
+
+# Follow redirects (catch vhosts that respond with 301/302)
+vfuzzer example.com 10.10.10.5 1234 -r
 
 # Subdomain mode (DNS fuzzing)
 vfuzzer example.com --dns 1234
@@ -52,4 +64,5 @@ vfuzzer example.com 10.10.10.5
 
 - Omit `FS` to use `ffuf -ac` (auto-calibration) — useful when you don't have a baseline size yet
 - `FS` is always the last positional argument; IP, protocol, and wordlist are auto-detected by format
-- Default wordlist: `/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt`
+- `-k` is required for HTTPS targets with self-signed certificates (common in CTF/lab environments)
+- Default wordlist: `/usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt`
