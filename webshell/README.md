@@ -1,4 +1,4 @@
-# webshell
+# Webshell
 
 A hacker-red CRT-styled PHP webshell for post-exploitation and CTF use.
 
