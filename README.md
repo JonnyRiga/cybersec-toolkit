@@ -9,6 +9,7 @@ Offensive-security tooling maintained by [@JonnyRiga](https://github.com/JonnyRi
 | [`privy/`](./privy)           | Privilege-escalation enumeration — `privy.sh` (Linux) & `privy.ps1` (Windows). Runs structured phases, flags findings, and produces prioritised P1/P2/P3 exploit recipes. |
 | [`credsniff/`](./credsniff)   | Targeted credential extraction and analysis for Linux post-exploitation. |
 | [`nmap-auto/`](./nmap-auto)   | Lightweight network-recon wrappers — `nmapz` (two-phase nmap auto-chain), `psw` (ping sweep), `ips` (interface viewer). |
+| [`webshell/`](./webshell)     | Retro-styled PHP webshell — password auth, command history, reverse shell launchers, file upload/download, sysinfo panel. |
 
 Each subdirectory has its own README with usage, features, and detection coverage.
 
