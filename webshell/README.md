@@ -26,7 +26,7 @@ A hacker-red CRT-styled PHP webshell for post-exploitation and CTF use.
 
 ## Setup
 
-1. Drop `webshell.php` somewhere the web server will execute PHP.
+1. Drop `x.php` somewhere the web server will execute PHP.
 2. Change the `PASSWORD` constant near the top of the file.
 3. Navigate to the file in your browser.
 
