@@ -60,7 +60,7 @@ banner() {
     echo "   ██║     ██║  ██║██║ ╚████╔╝    ██║"
     echo "   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═╝"
     echo "  ============================================================================"
-    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.2${RST}"
+    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.3${RST}"
     echo -e "${CYN}  ============================================================================${RST}"
     echo ""
 }
@@ -707,6 +707,16 @@ sub_header "Other SSH Dirs (all users)" "$keys"
 run_cmd "find .ssh dirs" "find /home -name '.ssh' -type d 2>/dev/null" "$keys"
 run_cmd "find authorized_keys" "find / -name 'authorized_keys' -type f 2>/dev/null" "$keys"
 run_cmd "find id_rsa" "find / -name 'id_rsa' -type f 2>/dev/null" "$keys"
+
+sub_header ".htpasswd Files (web credentials)" "$keys"
+run_cmd "find .htpasswd" "find /var/www /etc /home -name '.htpasswd' -readable 2>/dev/null" "$keys"
+htpasswd_hits=$(find /var/www /etc /home -name '.htpasswd' -readable 2>/dev/null)
+if [ -n "$htpasswd_hits" ]; then
+    finding ".htpasswd file(s) found — may contain plaintext or reused passwords!" "$keys"
+    echo "$htpasswd_hits" | while read -r hf; do
+        run_cmd "$hf" "cat $hf" "$keys"
+    done
+fi
 
 sub_header ".netrc Files (plaintext credentials)" "$keys"
 run_cmd "find .netrc" "find / -name '.netrc' -type f 2>/dev/null" "$keys"
