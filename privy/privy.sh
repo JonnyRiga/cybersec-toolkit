@@ -60,7 +60,7 @@ banner() {
     echo "   ██║     ██║  ██║██║ ╚████╔╝    ██║"
     echo "   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═╝"
     echo "  ============================================================================"
-    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.3${RST}"
+    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.4${RST}"
     echo -e "${CYN}  ============================================================================${RST}"
     echo ""
 }
@@ -397,6 +397,22 @@ for conf in /etc/apache2/apache2.conf /etc/httpd/conf/httpd.conf /etc/nginx/ngin
     fi
 done
 
+sub_header "Web Server Vhost Configs" "$svc"
+for vhostdir in /etc/apache2/sites-enabled /etc/apache2/sites-available \
+                /etc/nginx/sites-enabled /etc/nginx/sites-available \
+                /etc/nginx/conf.d /etc/httpd/conf.d; do
+    if [ -d "$vhostdir" ]; then
+        run_cmd "$vhostdir" "grep -rIl '' $vhostdir 2>/dev/null" "$svc"
+        vhost_creds=$(grep -rIEl 'auth_basic|AuthUserFile|proxy_pass|password|passwd' "$vhostdir" 2>/dev/null)
+        if [ -n "$vhost_creds" ]; then
+            finding "Vhost config(s) contain auth or credential directives: $vhostdir" "$svc"
+            echo "$vhost_creds" | while read -r vf; do
+                run_cmd "$vf" "cat $vf" "$svc"
+            done
+        fi
+    fi
+done
+
 sub_header "Installed Packages (snippet)" "$svc"
 run_cmd "dpkg -l (first 30)" "dpkg -l 2>/dev/null | head -30" "$svc"
 run_cmd "rpm -qa (first 30)" "rpm -qa 2>/dev/null | head -30" "$svc"
@@ -707,6 +723,17 @@ sub_header "Other SSH Dirs (all users)" "$keys"
 run_cmd "find .ssh dirs" "find /home -name '.ssh' -type d 2>/dev/null" "$keys"
 run_cmd "find authorized_keys" "find / -name 'authorized_keys' -type f 2>/dev/null" "$keys"
 run_cmd "find id_rsa" "find / -name 'id_rsa' -type f 2>/dev/null" "$keys"
+
+sub_header "SSH Client Configs (lateral movement)" "$keys"
+ssh_configs=$(find /home /root -name 'config' -path '*/.ssh/*' -readable 2>/dev/null)
+if [ -n "$ssh_configs" ]; then
+    finding "SSH client config(s) found — may reveal hosts, users, and identity files!" "$keys"
+    echo "$ssh_configs" | while read -r sc; do
+        run_cmd "$sc" "cat $sc" "$keys"
+    done
+else
+    run_cmd "find ssh configs" "find /home /root -name 'config' -path '*/.ssh/*' 2>/dev/null" "$keys"
+fi
 
 sub_header ".htpasswd Files (web credentials)" "$keys"
 run_cmd "find .htpasswd" "find /var/www /etc /home -name '.htpasswd' -readable 2>/dev/null" "$keys"
