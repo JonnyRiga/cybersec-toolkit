@@ -15,7 +15,7 @@ Two-platform privesc enumeration: `privy.sh` (Linux) and `privy.ps1` (Windows). 
 
 | Script | Platform | Version |
 |--------|----------|---------|
-| `privy.sh`  | Linux    | 1.1 |
+| `privy.sh`  | Linux    | 1.6 |
 | `privy.ps1` | Windows  | 1.1 |
 
 ---
@@ -51,38 +51,52 @@ Both always produce two must-read files:
 
 ---
 
-## `privy.sh` — Linux (15 phases)
+## `privy.sh` — Linux (16 phases)
 
 | Phase | Area | Output File |
 |-------|------|-------------|
-| 1 | System Information (kernel, OS, env, mounts) | `SysInfo.txt` |
-| 2 | User & Group Information (sudo, sudoers, UID 0) | `UserGroupInfo.txt` |
-| 3 | Passwd & Shadow Files | `Passwd.txt` / `Shadow.txt` |
-| 4 | Services & Running Processes | `RootServices.txt` |
-| 5 | Cron Jobs & Scheduled Tasks | `CronJobs.txt` |
-| 6 | PATH & Environment (LD_PRELOAD, shell profiles) | `PATH-Info.txt` |
-| 7 | Network Information (interfaces, firewall, NFS) | `NetworkInfo.txt` |
-| 8 | SUID / SGID Binaries & Capabilities | `SUID-GUID.txt` |
-| 9 | SSH Keys & Cloud Credentials | `SSHKeys.txt` |
-| 10 | MySQL / Database Info | `MySQL.txt` |
+| 1  | System Information (kernel, OS, env, mounts) | `SysInfo.txt` |
+| 2  | User & Group Information (sudo, sudoers, UID 0) | `UserGroupInfo.txt` |
+| 3  | Passwd & Shadow Files | `Passwd.txt` / `Shadow.txt` |
+| 4  | Services & Running Processes | `RootServices.txt` |
+| 5  | Cron Jobs & Scheduled Tasks | `CronJobs.txt` |
+| 6  | PATH & Environment (LD_PRELOAD, shell profiles) | `PATH-Info.txt` |
+| 7  | Network Information (interfaces, firewall, NFS) | `NetworkInfo.txt` |
+| 8  | SUID / SGID Binaries & Capabilities | `SUID-GUID.txt` |
+| 9  | SSH Keys & Cloud Credentials | `SSHKeys.txt` |
+| 10 | MySQL / PostgreSQL Database Info | `MySQL.txt` |
 | 11 | Interesting Files & Logs | `InterestingLogs.txt` |
 | 12 | File System Enumeration (backups, recent changes) | `FileSystem.txt` |
 | 13 | Shell Histories | `Histories.txt` |
 | 14 | Dev Tools & File Transfer Binaries | `DevTools.txt` |
-| 15 | Exploit Path Suggestions (auto-generated) | `01-ExploitPaths.txt` |
+| 15 | Third-Party Application CVE Check | `ThirdPartyApps.txt` |
+| 16 | Exploit Path Suggestions (auto-generated) | `01-ExploitPaths.txt` |
 
 **Detection coverage:**
 - **Dangerous groups:** `docker`, `lxd`/`lxc`, `disk`
 - **Sudo abuse:** NOPASSWD entries for shells, interpreters, editors, pagers, and 20+ file tools
 - **SUID GTFOBins:** `bash`, `find`, `python`, `perl`, `vim`, `awk`, `env`, `tar`, `nmap`, `pkexec` (PwnKit), `screen`, and 50+ more
 - **Capabilities:** `cap_setuid`, `cap_setgid`, `cap_dac_override`, `cap_sys_admin`, `cap_sys_ptrace`, `cap_net_raw`, `cap_fowner`
-- **Cron & service hijacks:** Writable cron scripts, writable systemd units, writable `/etc/crontab`
-- **Credential exposure:** Readable `/etc/shadow`, SSH private keys, `.netrc`, AWS/GCloud/Azure creds, MySQL no-password root, `/var/backups/`
+- **Cron & service hijacks:** Writable cron scripts, writable systemd units, writable `/etc/crontab`, writable MOTD scripts
+- **Credential exposure:** Readable `/etc/shadow`, SSH private keys, `.netrc`, AWS/GCloud/Azure creds, MySQL/PostgreSQL no-password root, `.htpasswd`, `/var/backups/`
 - **Container escapes:** Docker socket, lxd/lxc group, `/.dockerenv`
-- **CVEs:** Baron Samedit (CVE-2021-3156), PwnKit (CVE-2021-4034)
-- **Other:** NFS `no_root_squash`, multiple UID 0 accounts, writable `/etc/passwd`, writable PATH dirs, writable LD config
+- **Third-party app CVEs (Phase 15):** Version-aware detection for 8 common self-hosted services with known exploit paths auto-generated in `01-ExploitPaths.txt`
 
-**Requirements:** Bash 4+, standard Linux utils. No root required.
+| App | Key CVEs |
+|-----|----------|
+| Gogs | CVE-2024-39930/31/32/33 (RCE < 0.13.0), CVE-2022-0415 |
+| Gitea | Security fixes < 1.22.0, CVE-2022-1058 |
+| Jenkins | CVE-2024-23897 (unauth file read < 2.442), CVE-2023-27898 |
+| Grafana | CVE-2021-43798 (path traversal 8.0.0–8.3.0) |
+| MinIO | CVE-2023-28432 (env var leak) |
+| Flowise | CVE-2025-59528 (RCE), CVE-2025-58434 (reset token leak < 3.0.6) |
+| Nextcloud | CVE-2023-48239 (auth bypass < 27.1.3), CVE-2024-37302 |
+| Portainer | CVE-2022-26960 (path traversal < 2.11.1) |
+
+- **Kernel CVEs:** DirtyCow (CVE-2016-5195), DirtyPipe (CVE-2022-0847), Baron Samedit (CVE-2021-3156), PwnKit (CVE-2021-4034)
+- **Other:** NFS `no_root_squash`, multiple UID 0 accounts, writable `/etc/passwd`, writable PATH dirs, writable LD config, active tmux sessions
+
+**Requirements:** Bash 4+, standard Linux utils (`jq` recommended for Flowise version detection). No root required.
 
 ---
 
