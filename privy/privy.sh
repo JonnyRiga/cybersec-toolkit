@@ -1135,7 +1135,7 @@ echo "" >> "$thirdparty"
 sub_header "Grafana (monitoring)" "$thirdparty"
 grafana_bin=$(which grafana-server 2>/dev/null || find /opt /usr/sbin /usr/share -name 'grafana-server' -type f 2>/dev/null | head -1)
 grafana_ver=""
-if [ -n "$grafana_bin" ] || pgrep -f 'grafana' >/dev/null 2>&1; then
+if [ -n "$grafana_bin" ] || pgrep -f 'grafana-server' >/dev/null 2>&1; then
     [ -z "$grafana_bin" ] && grafana_bin="(process only)"
     if [ "$grafana_bin" != "(process only)" ]; then
         grafana_ver=$(_extract_ver "$("$grafana_bin" --version 2>/dev/null)")
@@ -1179,9 +1179,9 @@ if [ -n "$nextcloud_dir" ] || pgrep -f 'nextcloud' >/dev/null 2>&1; then
             finding "Nextcloud $nextcloud_ver — CVE-2023-48239: Auth bypass (< 27.1.3)" "$thirdparty"
             thirdparty_vulns="${thirdparty_vulns}NEXTCLOUD_AUTH_BYPASS:${nextcloud_ver}:${nextcloud_dir}\n"
         fi
-        # CVE-2024-37302: Nextcloud < 28.0.5 — SSRF via URL validation
-        if _ver_lt "$nextcloud_ver" "28.0.5"; then
-            finding "Nextcloud $nextcloud_ver — CVE-2024-37302: SSRF via URL validation (< 28.0.5)" "$thirdparty"
+        # CVE-2024-37302: Nextcloud 28.x < 28.0.5 — SSRF via URL validation (no 27.x backport)
+        if ! _ver_lt "$nextcloud_ver" "28.0.0" && _ver_lt "$nextcloud_ver" "28.0.5"; then
+            finding "Nextcloud $nextcloud_ver — CVE-2024-37302: SSRF via URL validation (28.0.0-28.0.4)" "$thirdparty"
         fi
     fi
     # Config file may contain DB credentials
@@ -1205,9 +1205,9 @@ portainer_bin=$(find /opt /usr/local/bin -name 'portainer' -type f 2>/dev/null |
 portainer_ver=""
 if [ -n "$portainer_bin" ] || pgrep -f 'portainer' >/dev/null 2>&1; then
     [ -z "$portainer_bin" ] && portainer_bin="(process only)"
-    if [ "$portainer_bin" != "(process only)" ]; then
-        portainer_ver=$(_extract_ver "$("$portainer_bin" --version 2>/dev/null)")
-    fi
+    # portainer binary has no --version flag; check docker image tag instead
+    portainer_ver=$(_extract_ver "$(docker inspect portainer 2>/dev/null | grep -oE '"Image":\s*"portainer/portainer[^"]*"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)")
+    [ -z "$portainer_ver" ] && portainer_ver=$(_extract_ver "$(docker ps --filter name=portainer --format '{{.Image}}' 2>/dev/null | head -1)")
     echo "  [FOUND] Portainer: $portainer_bin  (v${portainer_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Portainer found (v${portainer_ver:-unknown})${RST}"
     if [ -n "$portainer_ver" ]; then
