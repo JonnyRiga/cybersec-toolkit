@@ -9,7 +9,7 @@
 # ============================================================================
 #  Linux Privilege Escalation Enumeration Tool
 #  Author : Pentest-Ready
-#  Version: 1.2
+#  Version: 1.5
 #  Usage  : chmod +x privy.sh && ./privy.sh
 # ============================================================================
 
@@ -1041,10 +1041,10 @@ thirdparty_vulns=""
 
 # --- Gogs ---
 sub_header "Gogs (git server)" "$thirdparty"
-gogs_bin=$(find /opt/gogs /home /srv /usr/local -name 'gogs' -type f 2>/dev/null | head -1)
+gogs_bin=$(find /opt/gogs /opt /srv /usr/local -name 'gogs' -type f 2>/dev/null | head -1)
 gogs_ver=""
 if [ -n "$gogs_bin" ]; then
-    gogs_ver=$(_extract_ver "$($gogs_bin --version 2>/dev/null)")
+    gogs_ver=$(_extract_ver "$("$gogs_bin" --version 2>/dev/null)")
     echo "  [FOUND] Gogs: $gogs_bin  (v${gogs_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Gogs found: $gogs_bin (v${gogs_ver:-unknown})${RST}"
     if [ -n "$gogs_ver" ]; then
@@ -1077,15 +1077,15 @@ echo "" >> "$thirdparty"
 
 # --- Gitea ---
 sub_header "Gitea (git server)" "$thirdparty"
-gitea_bin=$(find /opt/gitea /usr/local/bin /home /srv -name 'gitea' -type f 2>/dev/null | head -1)
+gitea_bin=$(find /opt/gitea /opt /usr/local/bin /srv -name 'gitea' -type f 2>/dev/null | head -1)
 gitea_ver=""
 if [ -n "$gitea_bin" ]; then
-    gitea_ver=$(_extract_ver "$($gitea_bin --version 2>/dev/null)")
+    gitea_ver=$(_extract_ver "$("$gitea_bin" --version 2>/dev/null)")
     echo "  [FOUND] Gitea: $gitea_bin  (v${gitea_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Gitea found (v${gitea_ver:-unknown})${RST}"
     if [ -n "$gitea_ver" ]; then
         if _ver_lt "$gitea_ver" "1.22.0"; then
-            finding "Gitea $gitea_ver — CVE-2024-6886: CSRF/account takeover (< 1.22.0)" "$thirdparty"
+            finding "Gitea $gitea_ver — multiple security fixes in 1.22.0 including CSRF/account takeover — check Gitea security advisories for exact CVEs" "$thirdparty"
             thirdparty_vulns="${thirdparty_vulns}GITEA_CSRF:${gitea_ver}:${gitea_bin}\n"
         fi
         if _ver_lt "$gitea_ver" "1.16.5"; then
@@ -1133,7 +1133,7 @@ sub_header "Grafana (monitoring)" "$thirdparty"
 grafana_bin=$(which grafana-server 2>/dev/null || find /opt /usr/sbin /usr/share -name 'grafana-server' -type f 2>/dev/null | head -1)
 grafana_ver=""
 if [ -n "$grafana_bin" ]; then
-    grafana_ver=$(_extract_ver "$($grafana_bin --version 2>/dev/null)")
+    grafana_ver=$(_extract_ver "$("$grafana_bin" --version 2>/dev/null)")
     echo "  [FOUND] Grafana: $grafana_bin  (v${grafana_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Grafana found (v${grafana_ver:-unknown})${RST}"
     if [ -n "$grafana_ver" ]; then
@@ -1160,7 +1160,7 @@ echo "" >> "$thirdparty"
 sub_header "MinIO (object storage)" "$thirdparty"
 minio_bin=$(which minio 2>/dev/null || find /opt /usr/local/bin -name 'minio' -type f 2>/dev/null | head -1)
 if [ -n "$minio_bin" ]; then
-    minio_ver=$(_extract_ver "$($minio_bin --version 2>/dev/null)")
+    minio_ver=$(_extract_ver "$("$minio_bin" --version 2>/dev/null)")
     echo "  [FOUND] MinIO: $minio_bin  (v${minio_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] MinIO found (v${minio_ver:-unknown})${RST}"
     minio_creds=$(ps auxww 2>/dev/null | grep '[m]inio' | grep -oE 'MINIO_(ROOT|ACCESS)_(USER|KEY|PASSWORD)=[^ ]+')
@@ -1168,7 +1168,7 @@ if [ -n "$minio_bin" ]; then
         finding "MinIO credentials visible in process arguments!" "$thirdparty"
         echo "$minio_creds" | while read -r mc; do echo "       → $mc" >> "$thirdparty"; done
     fi
-    finding "MinIO detected — check CVE-2023-28432: POST /minio/health/cluster?verify leaks env vars (unauthenticated, RELEASE.2023-03-13 and earlier)" "$thirdparty"
+    finding "MinIO detected — check CVE-2023-28432 if version <= RELEASE.2023-03-13: POST /minio/health/cluster?verify leaks MINIO_ROOT_USER/PASSWORD unauthenticated (version detection unreliable for CalVer releases, verify manually)" "$thirdparty"
     thirdparty_vulns="${thirdparty_vulns}MINIO_INFO_LEAK:${minio_ver:-unknown}:${minio_bin}\n"
 else
     echo "  MinIO: not found" >> "$thirdparty"
@@ -1177,11 +1177,11 @@ echo "" >> "$thirdparty"
 
 # --- Flowise ---
 sub_header "Flowise (LLM workflow)" "$thirdparty"
-flowise_pkg=$(find /opt /home /srv /usr/local -name 'package.json' -path '*flowise*' 2>/dev/null | head -1)
+flowise_pkg=$(find /opt /srv /usr/local -name 'package.json' -path '*flowise*' 2>/dev/null | head -1)
 flowise_ver=""
 if [ -n "$flowise_pkg" ] || pgrep -f 'flowise' >/dev/null 2>&1; then
     if [ -n "$flowise_pkg" ] && [ -r "$flowise_pkg" ]; then
-        flowise_ver=$(_extract_ver "$(grep -o '"version":"[^"]*"' "$flowise_pkg" 2>/dev/null)")
+        flowise_ver=$(jq -r '.version' "$flowise_pkg" 2>/dev/null || grep -oE '"version":\s*"[^"]*"' "$flowise_pkg" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')
     fi
     echo "  [FOUND] Flowise: ${flowise_pkg:-running process}  (v${flowise_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Flowise found (v${flowise_ver:-unknown})${RST}"
@@ -1220,7 +1220,7 @@ echo ""
 #  16. EXPLOIT PATH SUGGESTIONS
 # ============================================================================
 echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
-echo -e "${MAG}  PHASE 15: EXPLOIT PATH SUGGESTIONS${RST}"
+echo -e "${MAG}  PHASE 16: EXPLOIT PATH SUGGESTIONS${RST}"
 echo -e "${MAG}═══════════════════════════════════════════════════════════════════════${RST}"
 
 {
@@ -1680,7 +1680,7 @@ if printf '%b' "$thirdparty_vulns" | grep -q "MINIO_INFO_LEAK"; then
     exploit_entry "P2" "MinIO — CVE-2023-28432: Unauthenticated env var disclosure" \
 "  POST to health endpoint leaks MINIO_ROOT_USER and MINIO_ROOT_PASSWORD:
   \$ curl -s -X POST http://localhost:9000/minio/health/cluster?verify
-  Use returned creds to access MinIO console or piviot to other services."
+  Use returned creds to access MinIO console or pivot to other services."
 fi
 
 if printf '%b' "$thirdparty_vulns" | grep -q "FLOWISE_RCE"; then
