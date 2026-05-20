@@ -87,3 +87,5 @@ reconweb() {  # scaffold a recon directory; usage: reconweb <name> [target]
   [[ -n "$target" ]] && echo "$target" > "$name/target"
   cd "$name"
 }
+
+toolserve() { (cd ~/Tools && sudo python3 -m http.server 80); }  # serve ~/Tools over HTTP on port 80; always serves from ~/Tools regardless of cwd
